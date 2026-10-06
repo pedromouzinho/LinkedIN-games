@@ -1,4 +1,4 @@
-// Player photos from a Football Manager cut-out facepack (files named <FM unique id>.png).
+// Player photos from a Football Manager cut-out facepack (files named face_<FM unique id>.png).
 // 1. Export FM people from a save:  fmsave export save.fm players --all -o players.csv  (and the same for staff)
 // 2. node scripts/faces.mjs uids players.csv staff.csv > uids.txt   -> the facepack files we want
 // 3. node scripts/faces.mjs build players.csv staff.csv <dir with the copied pngs> <out dir>
@@ -47,7 +47,7 @@ else if (cmd === 'build') {
   mkdirSync(outDir, { recursive: true });
   const have = [];
   for (const [id, uid] of Object.entries(match)) {
-    const src = `${rawDir}/${uid}.png`;
+    const src = `${rawDir}/face_${uid}.png`;
     if (!existsSync(src)) continue;
     execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', src, '-vf', 'scale=128:128:force_original_aspect_ratio=decrease', '-quality', '80', `${outDir}/${id}.webp`]);
     have.push(id);
