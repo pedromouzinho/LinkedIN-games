@@ -19,10 +19,14 @@ through invite links, compare results on a shared leaderboard.
   and only the first solve counts. Answers are validated on the server. Hints are counted (💡).
 
 ## Football data
-`data/football.json` is built from Wikidata (CC0): men's players with articles in 30+ Wikipedias, their clubs,
-years, league games and goals, caps, position, nationality and height. Refresh it with
-`NODE_USE_ENV_PROXY=1 node scripts/football-data.mjs` (about 10 minutes) and commit the result.
-No player photos or club crests are used (image rights); shirts are drawn from the clubs' colours.
+`data/football.json` is built from Wikidata (CC0) and English Wikipedia: men's players with articles in 30+ Wikipedias,
+their clubs, years, league games and goals, caps, position, nationality and height. Fame is the player's English
+Wikipedia views over the last 12 months: hidden answers are mostly the 600 most viewed (born 1970 or later), with a
+few from the next 1,400; grids, links and bingo use the top 2,000. For the 3,000 most viewed players, club and
+national-team rows come from their Wikipedia infobox, which editors keep up to date.
+Wikimedia rate-limits shared IPs, so refresh it on Google Cloud and commit the result:
+`gcloud builds submit --config scripts/cloudbuild-data.yaml . && gsutil cp gs://<project>-data/football.json data/`.
+No club crests are used (trademarks); shirts are drawn from the clubs' colours.
 
 ## Run locally
 ```bash

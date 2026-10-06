@@ -1,9 +1,11 @@
-// Builds data/football.json from Wikidata (CC0). Run: NODE_USE_ENV_PROXY=1 node scripts/football-data.mjs
+// Builds data/football.json from Wikidata (CC0) and English Wikipedia. Run: NODE_USE_ENV_PROXY=1 node scripts/football-data.mjs
 // Men's players with articles in 30+ Wikipedias, their club/national-team stints (years, apps, goals),
-// positions, nationality, clubs (country, league, colours) and leagues.
+// positions, nationality, clubs (country, league, colours) and leagues. Fame = English Wikipedia views over the
+// last 12 months; for the most viewed players, club and national-team rows come from their Wikipedia infobox,
+// which editors keep current (Wikidata's apps/goals are often years old).
 import { writeFile, mkdir } from 'node:fs/promises';
 
-const MIN_SITELINKS = 30;
+const MIN_SITELINKS = 30, INFOBOX_TOP = 3000;
 const UA = 'grid-games-data-builder/0.1 (https://github.com/pedromouzinho/LinkedIN-games)';
 const POS = { Q201330: 'GK', Q336286: 'DF', Q193592: 'MF', Q280658: 'FW' };
 // UK national teams share P17 = United Kingdom; flags need the home-nation codes.
@@ -39,20 +41,21 @@ const log = (...a) => console.error(new Date().toISOString().slice(11, 19), ...a
 const players = new Map();
 for (const [lo, hi] of [[30, 45], [45, 70], [70, 100000]]) {
   const rows = await sparql(`
-    SELECT ?p ?name ?s (SAMPLE(?dob) AS ?born) (SAMPLE(?h) AS ?height) (GROUP_CONCAT(DISTINCT ?g) AS ?pos) (SAMPLE(?cc) AS ?cit) WHERE {
+    SELECT ?p ?name ?s (SAMPLE(?dob) AS ?born) (SAMPLE(?h) AS ?height) (GROUP_CONCAT(DISTINCT ?g) AS ?pos) (SAMPLE(?cc) AS ?cit) (SAMPLE(?t) AS ?title) WHERE {
       ?p wdt:P106 wd:Q937857; wdt:P21 wd:Q6581097; wikibase:sitelinks ?s . FILTER(?s >= ${Math.max(lo, MIN_SITELINKS)} && ?s < ${hi})
       ?p rdfs:label ?name FILTER(LANG(?name) = "en")
       OPTIONAL { ?p wdt:P569 ?dob }
       OPTIONAL { ?p p:P2048/psn:P2048/wikibase:quantityAmount ?h }
       OPTIONAL { VALUES ?g { ${values(Object.keys(POS))} } ?p wdt:P413/wdt:P279* ?g }
       OPTIONAL { ?p wdt:P27/wdt:P297 ?cc }
+      OPTIONAL { ?art schema:about ?p; schema:isPartOf <https://en.wikipedia.org/>; schema:name ?t }
     } GROUP BY ?p ?name ?s`);
   for (const r of rows)
     players.set(qid(r.p), {
       id: qid(r.p), name: FIX_NAMES[qid(r.p)] || r.name, sl: +r.s, born: year(r.born),
       h: r.height ? Math.round(+r.height * 100) : null,
       pos: (r.pos || '').split(' ').filter(Boolean).map(u => POS[qid(u)]),
-      cit: r.cit || null, stints: [],
+      cit: r.cit || null, title: r.title || null, v: 0, stints: [],
     });
   log('players', lo, hi, rows.length);
 }
@@ -73,6 +76,89 @@ for (const ids of chunks([...players.keys()], 300)) {
   log('stints', rows.length);
   await sleep(500);
 }
+
+// ---------- fame: English Wikipedia views over the last 12 full months ----------
+const day = d => d.toISOString().slice(0, 10).replaceAll('-', '');
+const now = new Date(), to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)), from = new Date(Date.UTC(to.getUTCFullYear() - 1, to.getUTCMonth() + 1, 1));
+async function get(url) { // retries, and waits as long as Wikimedia asks when rate-limited
+  for (let i = 0; ; i++) {
+    const r = await fetch(url, { headers: { 'User-Agent': UA } }).catch(() => null);
+    if (r?.ok || r?.status === 404) return r;
+    if (i >= 8) throw new Error(`${r?.status} ${url}`);
+    await sleep(r?.status === 429 ? 1000 * (+r.headers.get('retry-after') || 60) : 3000 * (i + 1));
+  }
+}
+async function pool(items, n, fn) {
+  let next = 0;
+  await Promise.all(Array.from({ length: n }, async () => { while (next < items.length) await fn(items[next++]); }));
+}
+await pool([...players.values()].filter(p => p.title), 8, async p => {
+  const r = await get(`https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/${encodeURIComponent(p.title.replaceAll(' ', '_'))}/monthly/${day(from)}/${day(to)}`);
+  p.v = r.ok ? (await r.json()).items.reduce((s, x) => s + x.views, 0) : 0;
+});
+log('views', [...players.values()].sort((a, b) => b.v - a.v).slice(0, 5).map(p => `${p.name} ${p.v}`).join(', '));
+
+// ---------- Wikipedia infobox: club and national-team rows of the most viewed players ----------
+const wiki = params => sleep(1000).then(() => get('https://en.wikipedia.org/w/api.php?' + new URLSearchParams({ format: 'json', formatversion: 2, ...params }))).then(r => r.json());
+// Top-level "| key = value" params of {{Infobox football biography}}; values may contain [[a|b]] and {{x|y}}.
+function infobox(text) {
+  text = text.replace(/<!--[\s\S]*?-->/g, '').replace(/<ref[^>]*\/>|<ref[^>]*>[\s\S]*?<\/ref>/g, '');
+  const start = text.search(/\{\{\s*Infobox football biography/i);
+  if (start < 0) return null;
+  const out = {};
+  const add = s => { const m = /^\s*([\w-]+)\s*=([\s\S]*)$/.exec(s); if (m) out[m[1].toLowerCase()] = m[2].trim(); };
+  let depth = 0, cur = '';
+  for (let i = start + 2; i < text.length; i++) {
+    const two = text.slice(i, i + 2);
+    if (two === '{{' || two === '[[') { depth++; cur += two; i++; continue; }
+    if (two === '}}' || two === ']]') { if (depth === 0) break; depth--; cur += two; i++; continue; }
+    if (text[i] === '|' && depth === 0) { add(cur); cur = ''; } else cur += text[i];
+  }
+  add(cur);
+  return out;
+}
+const plain = v => (v || '').replace(/\{\{[^{}]*\}\}/g, '');
+const num = v => { const m = /\d+/.exec(plain(v)); return m ? +m[0] : null; };
+const link = v => /\[\[([^\]|#]+)/.exec(v || '')?.[1].trim() || null;
+function rows(box, prefix) { // years/clubs/caps/goals or nationalyears/nationalteam/nationalcaps/nationalgoals
+  const out = [];
+  for (let n = 1; n <= 40; n++) {
+    const team = link(box[`${prefix ? 'nationalteam' : 'clubs'}${n}`]), years = plain(box[`${prefix}years${n}`]);
+    const ys = years.match(/\d{4}/g);
+    if (!team || !ys) continue;
+    out.push({ title: team, from: +ys[0], to: ys[1] ? +ys[1] : /[–-]\s*$/.test(years.trim()) ? null : +ys[0],
+      apps: num(box[`${prefix}caps${n}`]), goals: num(box[`${prefix}goals${n}`]) });
+  }
+  return out;
+}
+const top = [...players.values()].filter(p => p.title).sort((a, b) => b.v - a.v).slice(0, INFOBOX_TOP), boxRows = new Map();
+for (const ids of chunks(top, 50)) {
+  const byTitle = new Map(ids.map(p => [p.title, p]));
+  const j = await wiki({ action: 'query', prop: 'revisions', rvprop: 'content', rvslots: 'main', rvsection: 0, titles: ids.map(p => p.title).join('|') });
+  for (const pg of j.query.pages) {
+    const box = pg.revisions && infobox(pg.revisions[0].slots.main.content), p = byTitle.get(pg.title);
+    if (box && p) boxRows.set(p.id, [...rows(box, ''), ...rows(box, 'national')]);
+  }
+}
+// Link targets -> Wikidata items, following redirects.
+const qidOf = new Map(), linked = [...new Set([...boxRows.values()].flat().map(r => r.title))];
+for (const titles of chunks(linked, 50)) {
+  const j = await wiki({ action: 'query', prop: 'pageprops', ppprop: 'wikibase_item', redirects: 1, titles: titles.join('|') });
+  const back = new Map();
+  for (const x of [...(j.query.normalized || []), ...(j.query.redirects || [])]) back.set(x.to, [...(back.get(x.to) || []), x.from]);
+  for (const pg of j.query.pages) {
+    if (!pg.pageprops?.wikibase_item) continue;
+    const names = [pg.title];
+    for (let k = 0; k < names.length; k++) names.push(...(back.get(names[k]) || []));
+    for (const n of names) qidOf.set(n, pg.pageprops.wikibase_item);
+  }
+}
+let fromBox = 0;
+for (const [id, rs] of boxRows) {
+  const stints = rs.filter(r => qidOf.has(r.title)).map(r => ({ team: qidOf.get(r.title), from: r.from, to: r.to, apps: r.apps, goals: r.goals }));
+  if (stints.length) { players.get(id).stints = stints; fromBox++; }
+}
+log('infobox careers', fromBox, '/', top.length);
 
 // ---------- teams ----------
 const teamIds = [...new Set([...players.values()].flatMap(p => p.stints.map(s => s.team)))];
@@ -141,7 +227,7 @@ for (const p of players.values()) {
   if (!clubStints.length) continue;
   clubStints.sort((a, b) => a[1] - b[1]);
   const [nat, nt] = [...caps].sort((a, b) => b[1].apps - a[1].apps)[0] || [p.cit, null];
-  out.push({ id: p.id, name: p.name, sl: p.sl, born: p.born, h: p.h, pos: [...new Set(p.pos)], nat,
+  out.push({ id: p.id, name: p.name, sl: p.sl, v: p.v, born: p.born, h: p.h, pos: [...new Set(p.pos)], nat,
     caps: nt?.apps ?? 0, intGoals: nt?.goals ?? 0, clubs: clubStints });
 }
 const usedLeagues = Object.fromEntries([...new Set(Object.values(clubs).map(c => c.league).filter(Boolean))].map(l => [l, leagues.get(l).name]));

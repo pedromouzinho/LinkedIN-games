@@ -332,7 +332,7 @@ const catHtml = c => (c.t === 'club' ? `${shirt(c.colors, c.name)}<span>${esc(c.
 const norm = t => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
 let playerList;
-const players = () => (playerList ??= api('/api/players').then(list => list.map(([id, name, nat, born]) => ({ id, name, nat, born, key: norm(name) }))));
+const players = () => (playerList ??= api('/api/players').then(list => list.map(([id, name, nat, club]) => ({ id, name, nat, club, key: norm(name) }))));
 
 // Type-ahead over every player in the database; most famous first, accents ignored.
 function searchBox(el, onPick) {
@@ -341,7 +341,7 @@ function searchBox(el, onPick) {
   const input = el.querySelector('input'), list = el.querySelector('ul');
   let items = [], active = 0;
   const paint = () => (list.innerHTML = items.map((p, i) => `<li role="option" data-i="${i}" data-id="${p.id}" class="${i === active ? 'on' : ''}">
-    <span class="flag">${flag(p.nat)}</span>${esc(p.name)}<span class="muted small born">${p.born}</span></li>`).join(''));
+    <span class="flag">${flag(p.nat)}</span>${esc(p.name)}<span class="muted small born">${esc(p.club)}</span></li>`).join(''));
   const choose = i => { const p = items[i]; if (!p) return; items = []; paint(); input.value = ''; onPick(p); };
   input.oninput = async () => {
     const toks = norm(input.value.trim()).split(/\s+/).filter(Boolean);

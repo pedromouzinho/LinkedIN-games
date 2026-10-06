@@ -16,10 +16,13 @@ for (const c of Object.values(CLUBS)) if (c.league && c.sl >= 60) (topLeague[c.c
 for (const c of Object.values(CLUBS))
   if (!c.league && c.sl >= 60 && topLeague[c.country]) c.league = Object.entries(topLeague[c.country]).sort((a, b) => b[1] - a[1])[0][0];
 
-// Sitelinks alone overrate players with bot-made stubs, so "known" also needs a stint at a well-known club.
-const TIER_A = PLAYERS.filter(p => p.sl >= 50 && p.maxClub >= 100 && p.born >= 1970); // hidden answers
-const TIER_B = PLAYERS.filter(p => p.sl >= 40 && p.maxClub >= 60 && p.born >= 1970); // grid / links / bingo picks
+// Fame = English Wikipedia views over the last year (p.v). Hidden answers are mostly the best known players,
+// with a few lesser-known ones; grids, links and bingo draw from the wider known pool.
+const RANKED = PLAYERS.filter(p => p.born >= 1970 && p.maxClub >= 60).sort((a, b) => b.v - a.v);
+const FAMOUS = RANKED.slice(0, 600), TIER_B = RANKED.slice(0, 2000), LESSER = TIER_B.slice(600);
+const answer = r => pick(r() < 0.85 ? FAMOUS : LESSER, r);
 const IN_B = new Set(TIER_B.map(p => p.id));
+const mainClub = p => CLUBS[p.clubs.reduce((a, b) => ((b[3] ?? 0) > (a[3] ?? 0) ? b : a))[0]].name; // most league games
 const BIG_CLUBS = Object.keys(CLUBS).filter(c => CLUBS[c].sl >= 80);
 const natCount = TIER_B.reduce((m, p) => m.set(p.nat, (m.get(p.nat) || 0) + 1), new Map());
 const NATS = [...natCount].filter(([c, k]) => c && k >= 15).map(([c]) => c);
@@ -86,7 +89,7 @@ export const FOOTBALL = {
   whoami: {
     gen(r) {
       for (;;) {
-        const p = pick(TIER_A, r), cs = career(p);
+        const p = answer(r), cs = career(p);
         if (cs.length < 4) continue;
         const four = [...cs].sort((a, b) => (b.apps ?? 0) - (a.apps ?? 0)).slice(0, 4).sort((a, b) => a.from - b.from);
         if (PLAYERS.filter(q => four.every(s => q.clubIds.has(s.club))).length !== 1) continue; // only one player fits all 4
@@ -114,7 +117,7 @@ export const FOOTBALL = {
   clues: {
     gen(r) {
       for (;;) {
-        const p = pick(TIER_A, r);
+        const p = answer(r);
         const spells = p.clubs.filter(([c, from, to, apps, goals]) => apps >= 10 && goals != null && CLUBS[c].sl >= 60 && (to ?? from + 1) - from <= 3);
         if (!spells.length || !p.h || !p.pos.length || !p.nat) continue;
         const [club, from, to, apps, goals] = pick(spells, r), league = CLUBS[club].league;
@@ -279,7 +282,7 @@ export const FOOTBALL = {
   hotcold: {
     gen(r) {
       for (;;) {
-        const p = pick(TIER_A, r);
+        const p = answer(r);
         if (p.born >= 1980 && p.h && p.pos.length && p.nat) return { answer: p.id };
       }
     },
@@ -346,7 +349,7 @@ export const FOOTBALL = {
       title: p.title, lives: BANDS.top10.lives - s.wrong.length,
       rows: p.rows.map(({ id, v }, i) => {
         const q = BY_ID.get(id), open = s.found.includes(id) || s.done;
-        return { rank: i + 1, hint: p.nat ? `${POS[q.pos[0]] || ''} · born ${Math.floor(q.born / 10) * 10}s` : nationName(q.nat), nat: p.nat ? null : q.nat,
+        return { rank: i + 1, hint: p.nat ? `${POS[q.pos[0]] || ''} · ${mainClub(q)}` : nationName(q.nat), nat: p.nat ? null : q.nat,
           name: open ? q.name : null, v: open ? v : null, found: s.found.includes(id) };
       }),
       wrong: s.wrong.map(id => BY_ID.get(id).name),
@@ -356,6 +359,7 @@ export const FOOTBALL = {
 };
 
 // Search list for the browser: every player, most famous first.
-export const PLAYER_INDEX = PLAYERS.map(p => [p.id, p.name, p.nat || '', p.born || '']); // birth year tells namesakes apart
+// Most viewed first, so the search suggests famous players first; the main club tells namesakes apart.
+export const PLAYER_INDEX = [...PLAYERS].sort((a, b) => b.v - a.v).map(p => [p.id, p.name, p.nat || '', mainClub(p)]);
 export const answerName = (game, p) => (p.answer ? BY_ID.get(p.answer).name : null);
 export { PLAYERS, fits, matching }; // for tests

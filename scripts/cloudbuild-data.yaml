@@ -1,0 +1,9 @@
+# Rebuilds data/football.json on Google Cloud (Wikimedia rate-limits shared IPs) and leaves it in a bucket:
+#   gcloud builds submit --config scripts/cloudbuild-data.yaml . && gsutil cp gs://$PROJECT_ID-data/football.json data/
+steps:
+  - name: node:22
+    entrypoint: node
+    args: [scripts/football-data.mjs]
+  - name: gcr.io/cloud-builders/gsutil
+    args: [cp, data/football.json, gs://$PROJECT_ID-data/football.json]
+timeout: 7200s
