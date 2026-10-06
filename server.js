@@ -30,13 +30,15 @@ const dayNum = day => Math.round((Date.parse(day) - Date.parse('2024-01-01')) / 
 const hmac = s => crypto.createHmac('sha256', SECRET).update(s).digest();
 
 // ---------- sessions: stateless signed cookie "uid.expiry.sig" ----------
+// Named __session because Firebase Hosting, in front of Cloud Run, drops every other cookie.
+const COOKIE = '__session';
 const sign = (uid, exp) => hmac(`session:${uid}.${exp}`).toString('base64url');
 const sessionCookie = (uid, secure) => {
   const exp = Date.now() + 30 * 864e5;
-  return `sid=${uid}.${exp}.${sign(uid, exp)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}${secure ? '; Secure' : ''}`;
+  return `${COOKIE}=${uid}.${exp}.${sign(uid, exp)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}${secure ? '; Secure' : ''}`;
 };
 function currentUid(req) {
-  const m = /(?:^|;\s*)sid=([\w-]+)\.(\d+)\.([\w-]+)/.exec(req.headers.cookie || '');
+  const m = /(?:^|;\s*)__session=([\w-]+)\.(\d+)\.([\w-]+)/.exec(req.headers.cookie || '');
   if (!m || +m[2] < Date.now()) return null;
   const good = Buffer.from(sign(m[1], m[2])), got = Buffer.from(m[3]);
   return good.length === got.length && crypto.timingSafeEqual(good, got) ? m[1] : null;
@@ -202,7 +204,7 @@ const routes = {
     if (!name) throw Object.assign(new Error('name required'), { status: 400 });
     return login(res, secure, `dev${hmac(name).toString('hex').slice(0, 12)}`, { name, picture: '' });
   },
-  'POST /api/logout': async ({ res }) => { res.setHeader('Set-Cookie', 'sid=; Path=/; Max-Age=0'); return { ok: true }; },
+  'POST /api/logout': async ({ res }) => { res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`); return { ok: true }; },
 
   'GET /api/me': async ({ uid }) => {
     const u = (await userDoc(uid).get()).data();
@@ -220,7 +222,7 @@ const routes = {
     fans.docs.forEach(d => w.update(d.ref, { connections: FieldValue.arrayRemove(uid) }));
     w.delete(userDoc(uid));
     await w.close();
-    res.setHeader('Set-Cookie', 'sid=; Path=/; Max-Age=0');
+    res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`);
     return { ok: true };
   },
   'GET /api/user': async ({ query }) => {
@@ -310,7 +312,7 @@ const server = http.createServer(async (req, res) => {
       if (type.startsWith('image') || f.endsWith('webmanifest')) res.setHeader('Cache-Control', 'public, max-age=86400');
       if (!f.endsWith('.html')) return send(200, await readFile(new URL(f, import.meta.url)), type);
       // pages carry the site's own address (share previews need absolute URLs); invite links name the inviter
-      const origin = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
+      const origin = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers['x-forwarded-host'] || req.headers.host}`;
       let title = 'Games@Work: two-minute daily puzzles', inv = url.searchParams.get('invite');
       if (inv && /^[\w-]{1,64}$/.test(inv)) { const u = (await userDoc(inv).get()).data(); if (u) title = `${u.name} invited you to Games@Work`; }
       const contact = CONTACT_EMAIL ? `<a href="mailto:${escHtml(CONTACT_EMAIL)}">${escHtml(CONTACT_EMAIL)}</a>` : 'the contact address the operator publishes';

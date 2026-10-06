@@ -1,0 +1,8 @@
+{
+  "hosting": {
+    "site": "gamesatwork",
+    "public": ".",
+    "ignore": ["**"],
+    "rewrites": [{ "source": "**", "run": { "serviceId": "games-at-work", "region": "europe-west1" } }]
+  }
+}

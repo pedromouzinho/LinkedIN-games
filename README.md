@@ -55,6 +55,9 @@ gcloud domains verify <domain>   # proves you own it (TXT record in your DNS)
 gcloud beta run domain-mappings create --service games-at-work --domain <domain> --region $R
 gcloud beta run domain-mappings describe --domain <domain> --region $R   # the DNS records to add at your registrar
 ```
+   Free alternative (live now): Firebase Hosting puts **https://gamesatwork.web.app** in front of the service (`firebase.json`).
+   Redeploy it with `npx firebase-tools deploy --only hosting` (only needed if `firebase.json` changes). Hosting passes on only the
+   cookie named `__session`, which is why the session cookie has that name.
 5. A budget alert (Billing → Budgets & alerts) tells you if costs ever move; it doesn't stop them, `--max-instances` does.
 
 | Env var | |
