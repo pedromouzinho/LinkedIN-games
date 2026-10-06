@@ -47,3 +47,14 @@ for (let day = 1; day <= days; day++) {
 }
 for (const [g, ms] of Object.entries(slow)) assert(ms < 3000, `${g} took ${ms.toFixed(0)}ms`);
 console.log(`ok: ${days} days, slowest ms`, Object.fromEntries(Object.entries(slow).map(([g, v]) => [g, Math.round(v)])));
+
+// rule reporting used by the UI messages
+{
+  const q = G.queensGen(G.rng(7)), [a] = q.solution, n = q.n;
+  const rules = G.queensRules(q, [a, a % n === n - 1 ? a - 1 : a + 1]).map(v => v.rule);
+  assert(rules.includes('row') && rules.includes('touch'), 'two queens side by side break row + touch');
+  const t = G.tangoGen(G.rng(7)), g = [...t.solution];
+  assert.deepEqual(G.tangoRules(t, g), [], 'solution has no violations');
+  assert(G.sudokuRules([1, 1, ...Array(34).fill(null)]).some(v => v.rule === 'row' && v.bad.length === 2), 'sudoku row duplicate');
+  console.log('ok: rule reporting');
+}

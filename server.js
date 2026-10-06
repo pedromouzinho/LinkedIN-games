@@ -85,13 +85,34 @@ const userDoc = uid => db.doc(`users/${uid}`);
 const playRef = (day, game, uid) => db.doc(`plays/${day}_${game}_${uid}`);
 const brief = (uid, u) => ({ uid, name: u?.name || '?', picture: u?.picture || '' });
 
-async function streak(uid) {
-  const days = new Set((await db.collection('plays').where('uid', '==', uid).get()).docs.filter(d => d.get('secs') != null).map(d => d.get('day')));
-  const d = new Date(Date.parse(today()));
-  if (!days.has(today())) d.setUTCDate(d.getUTCDate() - 1);
-  let n = 0;
-  while (days.has(d.toISOString().slice(0, 10))) { n++; d.setUTCDate(d.getUTCDate() - 1); }
-  return n;
+const shift = (day, n) => new Date(Date.parse(day) + n * 864e5).toISOString().slice(0, 10);
+// Current streak (ending today, or yesterday if today isn't won yet) and longest streak over a list of won days.
+function runs(days) {
+  const set = new Set(days);
+  let cur = 0, max = 0;
+  for (let d = set.has(today()) ? today() : shift(today(), -1); set.has(d); d = shift(d, -1)) cur++;
+  for (const d of set) if (!set.has(shift(d, -1))) { let k = 1; while (set.has(shift(d, k))) k++; max = Math.max(max, k); }
+  return { cur, max };
+}
+const finished = async uid => (await db.collection('plays').where('uid', '==', uid).get()).docs.map(d => d.data()).filter(p => p.secs != null);
+const streak = async uid => runs((await finished(uid)).filter(p => p.won !== false).map(p => p.day)).cur;
+
+// Everything the results page shows for one finished play.
+async function summary(uid, game, day) {
+  const [mine, board, field] = await Promise.all([finished(uid), leaderboard(uid, day),
+    db.collection('plays').where('day', '==', day).where('game', '==', game).get()]);
+  const play = mine.find(p => p.day === day && p.game === game);
+  if (!play) throw Object.assign(new Error('not finished yet'), { status: 409 });
+  const g = mine.filter(p => p.game === game), wins = g.filter(p => p.won !== false), r = runs(wins.map(p => p.day));
+  const others = field.docs.map(d => d.data()).filter(p => p.secs != null && p.won !== false && p.uid !== uid);
+  return {
+    secs: play.secs, won: play.won !== false, score: play.score ?? null, hints: play.hints || 0, reveal: play.reveal ?? null,
+    streak: runs(mine.filter(p => p.won !== false).map(p => p.day)).cur,
+    stats: { played: g.length, winPct: Math.round((100 * wins.length) / g.length), best: wins.length ? Math.min(...wins.map(p => p.secs)) : null, streak: r.cur, maxStreak: r.max },
+    week: Array.from({ length: 7 }, (_, i) => shift(day, i - 6)).map(d => ({ day: d, won: wins.some(p => p.day === d) })),
+    pct: play.won !== false && others.length ? Math.round((100 * others.filter(p => p.secs > play.secs).length) / others.length) : null,
+    board: board[game],
+  };
 }
 
 async function leaderboard(uid, day) {
@@ -129,7 +150,10 @@ const routes = {
 
   'GET /api/me': async ({ uid }) => {
     const u = (await userDoc(uid).get()).data();
-    const played = Object.fromEntries(await Promise.all(GAMES.map(async g => [g, (await playRef(today(), g, uid).get()).data()?.secs ?? null])));
+    const played = Object.fromEntries(await Promise.all(GAMES.map(async g => {
+      const d = (await playRef(today(), g, uid).get()).data();
+      return [g, d?.secs != null ? { secs: d.secs, won: d.won !== false, score: d.score ?? null } : null];
+    })));
     return { ...brief(uid, u), streak: await streak(uid), played, connections: u?.connections || [] };
   },
   'GET /api/user': async ({ query }) => {
@@ -148,6 +172,7 @@ const routes = {
     return { ok: true };
   },
   'GET /api/leaderboard': async ({ uid }) => leaderboard(uid, today()),
+  'GET /api/result': async ({ uid, game }) => summary(uid, game, today()),
 
   'GET /api/puzzle': async ({ uid, game, day }) => {
     const p = await puzzle(day, game);
@@ -164,15 +189,14 @@ const routes = {
     const p = await puzzle(day, game);
     if (!checkers[game](p, body.answer).win) return { win: false };
     if (day !== today()) return { win: true, practice: true };
-    const secs = await db.runTransaction(async tx => {
+    await db.runTransaction(async tx => {
       const ref = playRef(day, game, uid), d = (await tx.get(ref)).data();
       if (!d) throw Object.assign(new Error('open the puzzle first'), { status: 409 });
-      if (d.secs != null) return d.secs; // first solve counts
-      const now = Date.now(), s = Math.max(1, Math.round((now - d.started) / 1000));
-      tx.update(ref, { secs: s, solvedAt: now });
-      return s;
+      if (d.secs != null) return; // first solve counts
+      const now = Date.now();
+      tx.update(ref, { secs: Math.max(1, Math.round((now - d.started) / 1000)), solvedAt: now, won: true });
     });
-    return { win: true, secs, streak: await streak(uid), board: (await leaderboard(uid, day))[game] };
+    return { win: true, ...(await summary(uid, game, day)) };
   },
   'POST /api/hint': async ({ uid, game, day, body }) => {
     const p = await puzzle(day, game);
@@ -211,7 +235,7 @@ const server = http.createServer(async (req, res) => {
     if (!uid && !PUBLIC.has(route)) return send(401, { error: 'sign in' });
     const body = req.method === 'POST' ? await readBody(req) : {};
     const game = String(url.searchParams.get('game') || body.game || ''), day = String(url.searchParams.get('day') || body.day || today());
-    if (route.match(/puzzle|solve|hint/)) {
+    if (route.match(/puzzle|solve|hint|result/)) {
       if (!GAMES.includes(game)) return send(400, { error: 'unknown game' });
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < LAUNCH || day > today()) return send(400, { error: 'bad day' });
     }

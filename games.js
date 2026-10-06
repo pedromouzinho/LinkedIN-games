@@ -147,18 +147,25 @@ export function queensGen(r, { n, hardSteps } = BANDS.queens) {
   }
 }
 
-export function queensCheck({ n, regions }, queens) {
-  const q = [...queens], bad = new Set();
+// Rule violations, for the UI and the checkers: { rule, area: cells to hatch, bad: pieces at fault }.
+const groupBy = (a, f) => a.reduce((m, x) => m.set(f(x), [...(m.get(f(x)) || []), x]), new Map());
+
+export function queensRules({ n, regions }, queens) {
+  const q = [...queens], out = [];
+  const unit = { row: i => Math.floor(i / n), col: i => i % n, region: i => regions[i] };
+  for (const [rule, key] of Object.entries(unit))
+    for (const [k, qs] of groupBy(q, key)) if (qs.length > 1) out.push({ rule, area: range(n * n).filter(i => key(i) === k), bad: qs });
   for (let i = 0; i < q.length; i++)
-    for (let j = i + 1; j < q.length; j++) {
-      const [a, b] = [q[i], q[j]];
-      const ra = Math.floor(a / n), ca = a % n, rb = Math.floor(b / n), cb = b % n;
-      if (ra === rb || ca === cb || regions[a] === regions[b] || (Math.abs(ra - rb) < 2 && Math.abs(ca - cb) < 2)) {
-        bad.add(a); bad.add(b);
-      }
-    }
-  const ok = q.every(x => Number.isInteger(x) && x >= 0 && x < n * n);
-  return { bad, win: ok && q.length === n && !bad.size };
+    for (let j = i + 1; j < q.length; j++)
+      if (Math.abs(unit.row(q[i]) - unit.row(q[j])) < 2 && Math.abs(unit.col(q[i]) - unit.col(q[j])) < 2)
+        out.push({ rule: 'touch', area: [q[i], q[j]], bad: [q[i], q[j]] });
+  return out;
+}
+
+export function queensCheck(p, queens) {
+  const q = [...queens], bad = new Set(queensRules(p, q).flatMap(v => v.bad));
+  const ok = q.every(x => Number.isInteger(x) && x >= 0 && x < p.n * p.n);
+  return { bad, win: ok && q.length === p.n && !bad.size };
 }
 
 // ---------- Tango: 6x6 suns(0)/moons(1), 3 of each per row/col, no 3 in a row, = / × clues ----------
@@ -224,25 +231,22 @@ export function tangoGen(r, { hardest, clues } = BANDS.tango) {
   }
 }
 
-function tangoViolations(g, edges) {
-  const bad = new Set();
+export function tangoRules({ edges }, g) {
+  const out = [];
   for (const L of LINES) {
-    for (const v of [0, 1]) {
-      const cells = L.filter(x => g[x] === v);
-      if (cells.length > T / 2) cells.forEach(x => bad.add(x));
-    }
+    for (const v of [0, 1]) if (L.filter(x => g[x] === v).length > T / 2) out.push({ rule: 'count', area: L, bad: L.filter(x => g[x] === v) });
     for (let j = 0; j + 2 < T; j++) {
       const w = L.slice(j, j + 3);
-      if (g[w[0]] != null && w.every(x => g[x] === g[w[0]])) w.forEach(x => bad.add(x));
+      if (g[w[0]] != null && w.every(x => g[x] === g[w[0]])) out.push({ rule: 'three', area: w, bad: w });
     }
   }
   for (const { a, b, eq } of edges)
-    if (g[a] != null && g[b] != null && (g[a] === g[b]) !== eq) { bad.add(a); bad.add(b); }
-  return bad;
+    if (g[a] != null && g[b] != null && (g[a] === g[b]) !== eq) out.push({ rule: 'sign', area: [a, b], bad: [a, b] });
+  return out;
 }
 
-export function tangoCheck({ edges }, g) {
-  const bad = tangoViolations(g, edges);
+export function tangoCheck(p, g) {
+  const bad = new Set(tangoRules(p, g).flatMap(v => v.bad));
   return { bad, win: g.length === T * T && g.every(v => v === 0 || v === 1) && !bad.size };
 }
 
@@ -291,8 +295,21 @@ export function sudokuGen(r, { givens } = BANDS.sudoku) {
   }
 }
 
+export const sudokuPeers = i => PEERS[i];
+
+export function sudokuRules(g) {
+  const out = [];
+  UNITS.forEach((u, k) => {
+    for (const v of DIGITS) {
+      const at = u.filter(x => g[x] === v);
+      if (at.length > 1) out.push({ rule: ['row', 'col', 'box'][Math.floor(k / S)], area: u, bad: at });
+    }
+  });
+  return out;
+}
+
 export function sudokuCheck(g) {
-  const bad = new Set(range(S * S).filter(i => g[i] != null && !sudokuOk(g, i, g[i])));
+  const bad = new Set(sudokuRules(g).flatMap(v => v.bad));
   return { bad, win: g.length === S * S && g.every(v => DIGITS.includes(v)) && !bad.size };
 }
 
