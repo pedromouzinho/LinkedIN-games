@@ -71,7 +71,7 @@ console.log(`ok: ${days} days, slowest ms`, Object.fromEntries(Object.entries(sl
 
 // ---------- football games ----------
 {
-  const { FOOTBALL: F, BANDS: FB, PLAYERS, fits } = await import('./football.js');
+  const { FOOTBALL: F, BANDS: FB, PLAYERS, fits, matching } = await import('./football.js');
   const play = (g, p, s, a, t = 0) => F[g].move(p, s, a, t).state;
   const fdays = Math.min(days, 25);
   for (let day = 1; day <= fdays; day++) {
@@ -116,6 +116,8 @@ console.log(`ok: ${days} days, slowest ms`, Object.fromEntries(Object.entries(sl
     assert(ls.done && ls.won, 'links: all four groups win');
 
     const bg = time('bingo', () => F.bingo.gen(r));
+    assert.equal(matching(bg.stream.slice(0, FB.bingo.solvableWithin), bg.cats), 12, 'bingo: completable from the first 25 players');
+    assert.equal(new Set(bg.stream).size, bg.stream.length, 'bingo: no player twice');
     let bs = F.bingo.init(bg);
     const timeout = play('bingo', bg, bs, { skip: true }, FB.bingo.secs + 1);
     assert(timeout.done && !timeout.won, 'bingo: moves after the time limit end the game');

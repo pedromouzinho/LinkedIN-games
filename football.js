@@ -242,9 +242,14 @@ export const FOOTBALL = {
     gen(r) {
       for (;;) {
         const cats = shuffle([...shuffle(BIG_CLUBS, r).slice(0, 8).map(id => ({ t: 'club', id })), ...shuffle(NATS, r).slice(0, 4).map(id => ({ t: 'nat', id }))], r);
-        const fitting = TIER_B.filter(p => cats.some(c => fits(p, c))), others = TIER_B.filter(p => !cats.some(c => fits(p, c)));
-        const stream = shuffle([...shuffle(fitting, r).slice(0, 42), ...shuffle(others, r).slice(0, 18)], r).map(p => p.id);
-        if (matching(stream.slice(0, BANDS.bingo.solvableWithin), cats) === 12) return { cats, stream };
+        // one player per square first, so the board can always be completed from the first 25 players
+        const sure = [];
+        for (const c of cats) { const id = shuffle([...members(c)], r).find(x => !sure.includes(x)); if (id) sure.push(id); }
+        if (sure.length < 12) continue;
+        const rest = shuffle(TIER_B.map(p => p.id).filter(id => !sure.includes(id)), r);
+        const fitting = rest.filter(id => cats.some(c => fits(BY_ID.get(id), c))), others = rest.filter(id => !cats.some(c => fits(BY_ID.get(id), c)));
+        const head = shuffle([...sure, ...fitting.slice(0, 7), ...others.slice(0, 6)], r);
+        return { cats, stream: [...head, ...shuffle([...fitting.slice(7, 30), ...others.slice(6, 18)], r)] };
       }
     },
     init: () => ({ at: 0, cells: Array(12).fill(null), last: null }),
@@ -353,4 +358,4 @@ export const FOOTBALL = {
 // Search list for the browser: every player, most famous first.
 export const PLAYER_INDEX = PLAYERS.map(p => [p.id, p.name, p.nat || '']);
 export const answerName = (game, p) => (p.answer ? BY_ID.get(p.answer).name : null);
-export { PLAYERS, fits }; // for tests
+export { PLAYERS, fits, matching }; // for tests
