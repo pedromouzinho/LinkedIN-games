@@ -1,0 +1,70 @@
+:root {
+  --bg: #f4f2ee; --card: #fff; --text: #1d1d1d; --muted: #666; --line: #e0dfdc;
+  --brand: #0a66c2; --bad: #d11124; --given: #eef3f8;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #000; --card: #1b1f23; --text: #e9e9e9; --muted: #a0a0a0; --line: #38434f; --brand: #71b7fb; --given: #26303a; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1128px; margin: 0 auto; padding: 0 16px; }
+.nav { background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; }
+.nav .wrap { display: flex; gap: 12px; align-items: center; height: 52px; }
+.logo { background: var(--brand); color: #fff; font-weight: 800; border-radius: 4px; padding: 2px 6px; text-decoration: none; }
+.layout { display: grid; grid-template-columns: 225px 1fr 300px; gap: 24px; padding-top: 24px; align-items: start; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; } .profile { display: none; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 8px; color: inherit; }
+.card h2, .card h3 { margin: 0 0 8px; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+.profile { padding: 0 0 12px; text-align: center; overflow: hidden; }
+.banner { height: 56px; background: linear-gradient(120deg, #a0b4b7, #d8c8a8); }
+.avatar { width: 64px; height: 64px; border-radius: 50%; margin: -32px auto 8px; background: var(--brand); color: #fff; border: 2px solid var(--card);
+  display: grid; place-items: center; font-size: 28px; font-weight: 700; }
+.profile input { width: 80%; text-align: center; font: inherit; font-weight: 600; border: 0; border-bottom: 1px dashed var(--line); background: none; color: inherit; }
+
+.btn { background: var(--brand); color: #fff; border: 1px solid var(--brand); border-radius: 999px; padding: 6px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+.btn.ghost { background: none; color: var(--brand); }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 4px; background: none; color: inherit; padding: 6px; }
+ol { padding-left: 20px; margin: 0 0 8px; }
+li span { display: inline-block; width: calc(100% - 50px); }
+
+.tile { display: flex; align-items: center; gap: 16px; width: 100%; text-align: left; cursor: pointer; font: inherit; }
+.tile:hover { border-color: var(--brand); }
+.tile .icon { font-size: 32px; }
+.tile .status { margin-left: auto; color: var(--brand); font-weight: 600; }
+
+#timer { font-variant-numeric: tabular-nums; font-weight: 700; }
+.grid { --n: 6; display: grid; grid-template-columns: repeat(var(--n), 1fr); grid-template-rows: repeat(var(--n), 1fr); width: min(100%, 440px); margin: 0 auto;
+  aspect-ratio: 1; border: 2px solid var(--text); position: relative; touch-action: none; user-select: none; }
+.c { display: grid; place-items: center; border: 1px solid #0003; font-size: clamp(16px, 5vw, 26px); cursor: pointer; position: relative; color: #1d1d1d; background: var(--card); }
+.c.bt { border-top: 3px solid #1d1d1d; }
+.c.bl { border-left: 3px solid #1d1d1d; }
+.c.given { background: var(--given); color: var(--text); cursor: default; }
+.c.bad { box-shadow: inset 0 0 0 3px var(--bad); }
+.solved { pointer-events: none; }
+
+.sun { color: #f5a623; }
+.moon { color: #4a6ee0; }
+.edge { position: absolute; z-index: 1; font-style: normal; font-size: 14px; line-height: 16px; width: 16px; text-align: center;
+  background: var(--card); color: var(--muted); border-radius: 50%; }
+.edge.r { right: -9px; top: calc(50% - 8px); }
+.edge.d { bottom: -9px; left: calc(50% - 8px); }
+
+.sudoku .c { color: var(--text); }
+.sudoku .c:nth-child(6n+4) { border-left: 3px solid var(--text); }
+.sudoku .c:nth-child(n+13):nth-child(-n+18), .sudoku .c:nth-child(n+25):nth-child(-n+30) { border-top: 3px solid var(--text); }
+.c.sel { background: #cfe3fa; color: #1d1d1d; }
+.pad { display: flex; gap: 6px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+
+.zip .c.on { background: #ffe1c9; }
+.zip b { width: 70%; aspect-ratio: 1; border-radius: 50%; background: #1d1d1d; color: #fff; display: grid; place-items: center; z-index: 1; }
+.zip svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.zip polyline { fill: none; stroke: #f47b20; stroke-width: 0.35; stroke-linecap: round; stroke-linejoin: round; opacity: 0.85; }
+
+dialog { border: 0; border-radius: 12px; padding: 24px; max-width: 360px; background: var(--card); color: var(--text); }
+dialog::backdrop { background: #0008; }
+pre { background: var(--given); padding: 12px; border-radius: 6px; white-space: pre-wrap; }

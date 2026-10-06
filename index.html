@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Grid Games</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap">
+      <a class="logo" href="#">GG</a>
+      <strong>Grid Games</strong>
+      <span class="muted" id="today"></span>
+    </div>
+  </header>
+
+  <main class="wrap layout">
+    <aside class="card profile">
+      <div class="banner"></div>
+      <div class="avatar" id="avatar"></div>
+      <label class="sr" for="name">Your name</label>
+      <input id="name" placeholder="Your name" maxlength="30">
+      <p class="muted">🔥 <b id="streak">0</b>-day streak</p>
+    </aside>
+
+    <section id="center"></section>
+
+    <aside class="card">
+      <h3>Your network today</h3>
+      <div id="board"></div>
+      <h4>Add a connection's result</h4>
+      <textarea id="paste" rows="3" placeholder="Paste the text a friend shared"></textarea>
+      <button id="add" class="btn ghost">Add</button>
+      <p class="muted small" id="addMsg"></p>
+    </aside>
+  </main>
+
+  <dialog id="done">
+    <h2 id="doneTitle"></h2>
+    <pre id="shareText"></pre>
+    <div class="row">
+      <button id="share" class="btn">Share</button>
+      <button id="close" class="btn ghost">Close</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
