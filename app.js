@@ -47,6 +47,24 @@ const GAMES = {
     msgs: { row: 'Each row can only have one of each number.', col: 'Each column can only have one of each number.', box: 'Each 2×3 box can only have one of each number.' } },
 };
 
+// Football trivia: answers stay on the server, the board renders whatever view the server sends back.
+Object.assign(GAMES, {
+  whoami: { kind: 'f', title: 'Who Am I', icon: '🕵️', theme: '#1f6f50', search: true, skip: 'Skip · next club',
+    rules: 'I played for these 4 clubs. Who am I? You start with one club; each miss or skip reveals the next. Four tries.' },
+  clues: { kind: 'f', title: 'Clues', icon: '📊', theme: '#2b4c7e', search: true, skip: 'Skip · 2 more clues',
+    rules: 'Guess the player from one club spell. Two clues are shown; each miss or skip reveals two more. Four tries.' },
+  grid: { kind: 'f', title: 'Grid', icon: '⚽', theme: '#0f766e', search: true,
+    rules: 'Fill the 3×3 grid: each square needs a player who fits its row and its column. 12 guesses; a player can only be used once.' },
+  links: { kind: 'f', title: 'Links', icon: '🧶', theme: '#7c3aed',
+    rules: 'Find four groups of four players with something in common. Pick four and submit. Four mistakes and it’s over.' },
+  bingo: { kind: 'f', title: 'Bingo', icon: '🎯', theme: '#b45309',
+    rules: 'Players appear one by one: tap a square they fit, or skip. Fill all 12 squares in 90 seconds. A wrong square loses that player.' },
+  hotcold: { kind: 'f', title: 'Hot or Cold', icon: '🌡️', theme: '#c2410c', search: true,
+    rules: 'Find the secret player in 10 guesses. Every guess shows what matches: nation, position, age, height, league and clubs in common.' },
+  top10: { kind: 'f', title: 'Top 10', icon: '🔟', theme: '#334155', search: true,
+    rules: 'Name the ten players on today’s list. Each row has a hint. Three wrong names and the round ends.' },
+});
+
 let cfg, me;
 const inviteLink = () => `${location.origin}/?invite=${me.uid}`;
 
@@ -96,7 +114,7 @@ function left() {
   $('#logout').onclick = async () => { await api('/api/logout', {}); boot(); };
 }
 
-const lbRows = rows => rows.map(r => `<li class="${r.me ? 'me' : ''}">${avatar(r)}<span class="nm">${esc(r.name)}</span>${r.hints ? `<i title="hints used">💡${r.hints}</i>` : ''}<b>${fmt(r.secs)}</b></li>`).join('');
+const lbRows = rows => rows.map(r => `<li class="${r.me ? 'me' : ''}${r.won === false ? ' lost' : ''}">${avatar(r)}<span class="nm">${esc(r.name)}</span>${r.hints ? `<i title="hints used">💡${r.hints}</i>` : ''}<b>${r.won === false ? '✗' : fmt(r.secs)}</b></li>`).join('');
 
 async function right() {
   const board = await api('/api/leaderboard');
@@ -134,8 +152,10 @@ function home() {
     if (day < cfg.launch || past.length >= 14) break;
     past.push(day);
   }
-  $('#center').innerHTML = `<div class="card"><h2>Today’s puzzles</h2><p class="muted">Solve one every day to keep your streak.</p></div>
-    ${Object.keys(GAMES).map(tile).join('')}
+  const ids = Object.keys(GAMES), logic = ids.filter(id => !GAMES[id].kind), ball = ids.filter(id => GAMES[id].kind === 'f');
+  $('#center').innerHTML = `<div class="card"><h2>Today’s puzzles</h2><p class="muted">Win one every day to keep your streak.</p></div>
+    <h3 class="sec">🧠 Logic</h3>${logic.map(tile).join('')}
+    <h3 class="sec">⚽ Football</h3>${ball.map(tile).join('')}
     ${past.length ? `<div class="card"><h3>Archive</h3><p class="muted small">Practice past puzzles. They don’t count for the leaderboard.</p>
       ${past.map(day => `<div class="arch"><span>${new Date(day + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
         ${Object.entries(GAMES).map(([id, g]) => `<button class="btn ghost small" data-game="${id}" data-day="${day}" title="${g.title}">${g.icon}</button>`).join('')}</div>`).join('')}</div>` : ''}`;
@@ -154,7 +174,11 @@ function intro(id, day) {
     ${practice ? '' : '<p class="muted small">The timer starts when you press Start and keeps running if you leave.</p>'}
   </div>`;
   $('#back').onclick = home;
-  $('#start').onclick = async () => { $('#start').disabled = true; play(id, await api(`/api/puzzle?game=${id}&day=${day}`)); };
+  $('#start').onclick = async () => {
+    $('#start').disabled = true;
+    const data = await api(`/api/puzzle?game=${id}&day=${day}`);
+    (data.football ? playFootball : play)(id, data);
+  };
 }
 
 // ---------- the game screen: shared toolbar, history, timer, rule messages; per-game boards below ----------
@@ -235,14 +259,15 @@ async function result(id, day, res) {
   $('#center').onclick = null;
   if (res.practice) {
     $('#center').innerHTML = `<div class="card result" style="--theme:${g.theme}"><div class="res-hero"><div class="big pop">${g.icon}</div>
-      <h2>Practice solved!</h2><div class="res-inner"><span class="pill">${fmt(res.secs)}</span><span class="muted small">Archive puzzles don’t count for the leaderboard.</span></div></div>
+      <h2>${res.won === false ? 'Practice over' : 'Practice solved!'}</h2><div class="res-inner"><span class="pill">${fmt(res.secs)}</span><span class="muted small">Archive puzzles don’t count for the leaderboard.</span></div></div>
       <div class="row center"><button class="btn ghost" id="next">More puzzles</button></div></div>`;
     return ($('#next').onclick = home);
   }
   if (!res.stats) res = await api(`/api/result?game=${id}`);
-  const headline = res.pct == null ? 'First to finish today!' : res.pct >= 90 ? 'Lightning fast ⚡' : res.pct >= 60 ? 'Faster than most' : res.pct >= 30 ? 'Nicely done' : 'Solved!';
-  const sub = res.pct == null ? 'Nobody else has finished yet.' : `Faster than ${res.pct}% of today’s players`;
-  const text = `${g.title} #${cfg.num} | ${fmt(res.secs)} ${g.icon}${res.hints ? ` · 💡${res.hints}` : ''}\n🔥 ${res.streak}-day streak\nPlay with me: ${inviteLink()}`;
+  const headline = !res.won ? 'Not this time' : res.pct == null ? 'First to finish today!' : res.pct >= 90 ? 'Lightning fast ⚡' : res.pct >= 60 ? 'Faster than most' : res.pct >= 30 ? 'Nicely done' : 'Solved!';
+  const sub = !res.won ? 'A new one is waiting tomorrow.' : res.pct == null ? 'Nobody else has finished yet.' : `Faster than ${res.pct}% of today’s players`;
+  const line = g.kind === 'f' ? res.share : fmt(res.secs);
+  const text = `${g.title} #${cfg.num} ${g.icon}\n${line}${g.kind === 'f' ? ` · ${fmt(res.secs)}` : ''}${res.hints ? ` · 💡${res.hints}` : ''}\n🔥 ${res.streak}-day streak\nPlay with me: ${inviteLink()}`;
   const s = res.stats, others = Object.keys(GAMES).filter(k => k !== id && !me.played[k]);
   $('#center').innerHTML = `<div class="card result" style="--theme:${g.theme}">
     <div class="res-hero">
@@ -250,7 +275,7 @@ async function result(id, day, res) {
       <div class="small">${g.title} #${cfg.num}</div>
       <h2>See you tomorrow.</h2>
       <div class="res-inner">
-        <span class="pill">Solved in ${fmt(res.secs)}</span>
+        <span class="pill">${res.won ? `Solved in ${fmt(res.secs)}` : 'Round over'}</span>${g.kind === 'f' && res.share ? `<pre class="share">${esc(res.share)}</pre>` : ''}
         <b>${headline}</b><span class="muted small">${sub}</span>
         <div class="row center"><button class="btn" id="share">Share</button><button class="btn ghost" id="copy">Copy</button></div>
       </div>
@@ -277,6 +302,209 @@ async function copy(text, done) {
 async function share(text, copied) {
   try { await navigator.share({ text }); } catch (e) { if (e.name !== 'AbortError') copy(text, copied); }
 }
+
+// ---------- football: shared frame, player search, one renderer per game ----------
+const HOME_NATIONS = { 'GB-ENG': 'England', 'GB-SCT': 'Scotland', 'GB-WLS': 'Wales', 'GB-NIR': 'Northern Ireland' };
+const regionName = new Intl.DisplayNames(undefined, { type: 'region' });
+const nation = c => (c ? HOME_NATIONS[c] || regionName.of(c.slice(0, 2)) : '');
+const flag = c => !c ? '' : c.startsWith('GB-')
+  ? '🏴' + [...('gb' + c.slice(3).toLowerCase())].map(ch => String.fromCodePoint(0xe0000 + ch.charCodeAt(0))).join('') + '\u{e007f}'
+  : [...c.slice(0, 2)].map(ch => String.fromCodePoint(0x1f1a5 + ch.charCodeAt(0))).join('');
+const hue = s => [...s].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 360, 7);
+const shirt = (colors = [], name = '') => {
+  const [a, b] = colors.length ? colors.map(x => '#' + x) : [`hsl(${hue(name)} 55% 42%)`];
+  return `<svg class="shirt" viewBox="0 0 40 40" aria-hidden="true"><g stroke="#0004" stroke-width="1">
+    <path d="M11 9 16 5q4 3 8 0l5 4v28H11z" fill="${a}"/><path d="M11 9 4 13l3 7 4-3zM29 9l7 4-3 7-4-3z" fill="${b || a}"/></g></svg>`;
+};
+const catHtml = c => (c.t === 'club' ? `${shirt(c.colors, c.name)}<span>${esc(c.name)}</span>`
+  : c.t === 'nat' ? `<span class="flag">${flag(c.id)}</span><span>${esc(c.name)}</span>` : `<span class="flag">🧤</span><span>${esc(c.name)}</span>`);
+const norm = t => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+let playerList;
+const players = () => (playerList ??= api('/api/players').then(list => list.map(([id, name, nat]) => ({ id, name, nat, key: norm(name) }))));
+
+// Type-ahead over every player in the database; most famous first, accents ignored.
+function searchBox(el, onPick) {
+  el.innerHTML = `<div class="search"><input placeholder="Type a player’s name…" autocomplete="off" spellcheck="false" aria-label="Player name">
+    <ul role="listbox"></ul></div>`;
+  const input = el.querySelector('input'), list = el.querySelector('ul');
+  let items = [], active = 0;
+  const paint = () => (list.innerHTML = items.map((p, i) => `<li role="option" data-i="${i}" class="${i === active ? 'on' : ''}">
+    <span class="flag">${flag(p.nat)}</span>${esc(p.name)}</li>`).join(''));
+  const choose = i => { const p = items[i]; if (!p) return; items = []; paint(); input.value = ''; onPick(p); };
+  input.oninput = async () => {
+    const toks = norm(input.value.trim()).split(/\s+/).filter(Boolean);
+    items = [];
+    if (toks.join('').length >= 2) for (const p of await players()) if (toks.every(t => p.key.includes(t)) && items.push(p) >= 7) break;
+    active = 0;
+    paint();
+  };
+  input.onkeydown = e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { active = (active + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % Math.max(1, items.length); paint(); e.preventDefault(); }
+    else if (e.key === 'Enter') { choose(active); e.preventDefault(); }
+  };
+  list.onpointerdown = e => { const li = e.target.closest('li'); if (li) { e.preventDefault(); choose(+li.dataset.i); } };
+  return input;
+}
+
+function playFootball(id, data) {
+  stop();
+  const g = GAMES[id], practice = !data.play, ui = FBOARDS[id], local = {};
+  let view = data.view, busy = false, finished = data.done;
+  $('#center').innerHTML = `<div class="card game f-${id}" style="--theme:${g.theme}">
+    <div class="row"><button class="btn ghost small" id="back" aria-label="Back">←</button><b>${g.icon} ${g.title} ${practice ? data.day : '#' + data.num}</b><span id="timer">0:00</span></div>
+    <div id="fboard"></div>
+    <div id="fmsg" aria-live="polite"></div>
+    <div id="fask"></div>
+    <div class="row center tools">${g.skip ? `<button class="btn ghost small" id="skip">${g.skip}</button>` : ''}<button class="btn ghost small" id="giveup">Give up</button></div>
+    <p class="muted small">${g.rules}</p>
+  </div>`;
+  $('#back').onclick = () => { stop(); home(); };
+  const t0 = Date.now() - (data.elapsed || 0) * 1000, timer = $('#timer');
+  const show = () => { timer.textContent = fmt(Math.floor((Date.now() - t0) / 1000)); ui.tick?.(local, (Date.now() - t0) / 1000, act); };
+  if (!finished) { show(); tick = setInterval(show, 250); }
+
+  const say = r => { if (r?.msg) { $('#fmsg').textContent = r.msg; $('#fmsg').className = r.ok ? 'ok' : r.neutral ? '' : 'no'; } };
+  const draw = () => ui.render($('#fboard'), view, act, local);
+  async function act(action) {
+    if (busy || finished) return;
+    busy = true;
+    try {
+      const r = await api('/api/move', { game: id, day: data.day, action });
+      view = r.view;
+      say(r.reply);
+      local.choices = r.reply?.choices || null;
+      local.pending = r.reply?.guess || null;
+      draw();
+      if (r.done) end(r);
+    } catch (e) { say({ msg: e.message }); } finally { busy = false; }
+  }
+  function end(r) {
+    finished = true;
+    stop();
+    $('#fask').innerHTML = '';
+    $('#giveup')?.remove();
+    $('#skip')?.remove();
+    const res = practice ? { practice: true, secs: r.elapsed, won: r.won } : r.result;
+    if (!practice) { me.played[id] = { secs: res.secs, won: res.won, score: res.score }; me.streak = res.streak; left(); right(); }
+    $('#fmsg').insertAdjacentHTML('afterend', `<div class="row center"><button class="btn" id="seeres">See results →</button></div>`);
+    $('#seeres').onclick = () => result(id, data.day, res);
+  }
+  if (g.search && !finished) searchBox($('#fask'), p => act({ guess: p.id }));
+  if (g.search) $('#fask input')?.focus();
+  $('#skip')?.addEventListener('click', () => act({ skip: true }));
+  $('#giveup').onclick = async () => { if (await ask('Give up?', 'The answer will be revealed and today’s round ends.', 'Give up')) act({ giveUp: true }); };
+  draw();
+  if (finished) end({ elapsed: data.elapsed, won: data.won, result: practice ? null : { secs: data.elapsed } });
+}
+
+const yrs = (a, b) => (a === b || b === a + 1 ? `${a}` : `${a}–${b ?? 'now'}`);
+const FBOARDS = {
+  whoami: {
+    render(el, v, act) {
+      const slot = k => { const c = v.clubs[k];
+        return c ? `<div class="club">${shirt(c.colors, c.name)}<b>${esc(c.name)}</b><span class="muted small">${yrs(c.from, c.to)}${c.more ? ' +' : ''}</span></div>`
+          : `<div class="club empty"><b>${k + 1}</b></div>`; };
+      el.innerHTML = `<div class="who">${[0, 1, 3, 2].map(slot).join('')}
+        <div class="face">${v.answer ? `<span class="av big-av">${esc(v.answer.name[0])}</span><b>${esc(v.answer.name)}</b>` : '?'}</div></div>
+        <p class="center muted">I played for these ${v.total} clubs. Who am I?</p>
+        ${v.guesses.length ? `<p class="tries">${v.guesses.map(n => `<s>${esc(n || 'skip')}</s>`).join(' ')}</p>` : ''}`;
+    },
+  },
+
+  clues: {
+    render(el, v) {
+      const label = { apps: 'Games', goals: 'Goals', height: 'Height', pos: 'Position', age: 'Age', caps: 'Caps', nat: 'Nation', club: 'Club' };
+      const val = ({ k, v: x }) => (k === 'club' ? `${shirt(x.colors, x.name)}<b>${esc(x.name)}</b>` : k === 'nat' ? `<span class="flag">${flag(x)}</span><b>${esc(nation(x))}</b>`
+        : `<b>${esc(k === 'height' ? `${x} cm` : x)}</b>`);
+      el.innerHTML = `<div class="banner">${esc(v.banner.league)} · ${yrs(v.banner.from, v.banner.to)}</div>
+        <div class="statgrid">${v.tiles.map(t => `<div class="stat on">${val(t)}<span>${label[t.k]}</span></div>`).join('')}
+        ${v.hidden.map(k => `<div class="stat"><b>?</b><span>${label[k]}</span></div>`).join('')}</div>
+        <div class="pills">${Array.from({ length: v.attempts }, (_, i) => `<i class="${i < v.used ? 'used' : ''}"></i>`).join('')}</div>
+        ${v.answer ? `<p class="center reveal">It was <b>${esc(v.answer.name)}</b> ${flag(v.answer.nat)}</p>` : ''}
+        ${v.guesses.length ? `<p class="tries">${v.guesses.map(n => `<s>${esc(n || 'skip')}</s>`).join(' ')}</p>` : ''}`;
+    },
+  },
+
+  grid: {
+    render(el, v, act, local) {
+      const head = c => `<div class="hd">${catHtml(c)}</div>`;
+      const cell = i => { const c = v.cells[i], pick = local.choices?.includes(i);
+        return `<button class="sq${c ? (c.ok ? ' ok' : ' miss') : ''}${pick ? ' pick' : ''}" data-cell="${i}" ${pick ? '' : 'tabindex="-1"'}>${c ? esc(c.name) : pick ? 'Here?' : ''}</button>`; };
+      el.innerHTML = `<div class="fgrid"><div class="hd corner"><b>${v.guessesLeft}</b><span class="small muted">guesses left</span></div>
+        ${v.cats.slice(3).map(head).join('')}
+        ${[0, 1, 2].map(r => head(v.cats[r]) + [0, 1, 2].map(c => cell(r * 3 + c)).join('')).join('')}</div>`;
+      el.onclick = e => { const b = e.target.closest('[data-cell]'); if (b && local.choices?.includes(+b.dataset.cell)) act({ guess: local.pending, cell: +b.dataset.cell }); };
+    },
+  },
+
+  links: {
+    render(el, v, act, local) {
+      local.sel ??= new Set();
+      local.order ??= v.cards.map(c => c.id);
+      const cards = local.order.map(id => v.cards.find(c => c.id === id)).filter(Boolean);
+      el.innerHTML = `${v.solved.map(g => `<div class="group l${g.level}${g.found ? '' : ' missed'}"><b>${esc(g.title)}</b><span>${g.names.map(esc).join(', ')}</span></div>`).join('')}
+        <div class="cards">${cards.map(c => `<button class="pcard${local.sel.has(c.id) ? ' sel' : ''}" data-id="${c.id}">${esc(c.name)}</button>`).join('')}</div>
+        ${cards.length ? `<div class="row center"><span class="muted small">Mistakes left: ${'●'.repeat(v.maxMistakes - v.mistakes)}${'○'.repeat(v.mistakes)}</span></div>
+        <div class="row center tools"><button class="btn ghost small" id="shuf">Shuffle</button><button class="btn ghost small" id="desel">Deselect</button>
+        <button class="btn small" id="submit" ${local.sel.size === 4 ? '' : 'disabled'}>Submit</button></div>` : ''}`;
+      el.onclick = e => {
+        const c = e.target.closest('[data-id]');
+        if (c) { const id = c.dataset.id; local.sel.has(id) ? local.sel.delete(id) : local.sel.size < 4 && local.sel.add(id); return this.render(el, v, act, local); }
+        if (e.target.id === 'desel') { local.sel.clear(); this.render(el, v, act, local); }
+        if (e.target.id === 'shuf') { local.order = local.order.map(x => [Math.random(), x]).sort((a, b) => a[0] - b[0]).map(x => x[1]); this.render(el, v, act, local); }
+        if (e.target.id === 'submit') { const pick = [...local.sel]; local.sel.clear(); act({ submit: pick }); }
+      };
+    },
+  },
+
+  bingo: {
+    render(el, v, act, local) {
+      local.end ??= Date.now() + v.remaining * 1000;
+      el.innerHTML = `<div class="bingo-top"><div class="ring" id="ring">${Math.ceil(v.remaining)}</div>
+        <div class="now">${v.current ? `<span class="muted small">Where does he fit?</span><b>${esc(v.current.name)}</b><span class="muted small">${v.left} players left</span>` : '<b>Done</b>'}</div>
+        ${v.current ? '<button class="btn small" id="bskip">Skip</button>' : ''}</div>
+        <div class="bingo">${v.cats.map((c, i) => `<button class="bq${v.cells[i] ? ' ok' : ''}${v.wrong === i ? ' wrong' : ''}" data-cell="${i}" ${v.cells[i] ? 'disabled' : ''}>
+          ${v.cells[i] ? `<b>${esc(v.cells[i])}</b><span class="muted">${esc(c.name)}</span>` : catHtml(c)}</button>`).join('')}</div>`;
+      el.onclick = e => {
+        if (e.target.id === 'bskip') return act({ skip: true });
+        const b = e.target.closest('[data-cell]');
+        if (b && !b.disabled) act({ cell: +b.dataset.cell });
+      };
+    },
+    tick(local, secs, act) {
+      if (!local.end) return;
+      const left = Math.max(0, Math.ceil((local.end - Date.now()) / 1000)), ring = $('#ring');
+      if (ring) { ring.textContent = left; ring.classList.toggle('low', left <= 15); }
+      if (left === 0 && !local.sent && Date.now() > local.end + 1500) { local.sent = true; act({ timeout: true }); }
+    },
+  },
+
+  hotcold: {
+    render(el, v) {
+      const arrow = d => (d > 0 ? '↑' : d < 0 ? '↓' : '=');
+      const chip = (ok, html, title) => `<span class="chip ${ok ? 'yes' : 'no'}" title="${title}">${html}</span>`;
+      el.innerHTML = `${v.answer ? `<p class="center reveal">It was <b>${esc(v.answer.name)}</b> ${flag(v.answer.nat)}</p>` : ''}
+        <p class="center muted small">${v.max - v.guesses.length} guesses left · ↑ / ↓: the secret player’s birth year or height is higher / lower</p>
+        <div class="hc">${[...v.guesses].reverse().map(x => `<div class="guess">
+          <div class="row"><b>${esc(x.name)}</b><span class="meter"><i style="width:${x.score}%"></i></span><b>${x.score}</b></div>
+          <div class="chips">${chip(x.nat.ok, `${flag(x.nat.v)} ${esc(nation(x.nat.v))}`, 'Nation')}${chip(x.pos.ok, esc(x.pos.v), 'Position')}
+            ${chip(x.born.dir === 0, `${x.born.v} ${arrow(x.born.dir)}`, 'Born')}${x.height.v ? chip(x.height.dir === 0, `${x.height.v} cm ${arrow(x.height.dir)}`, 'Height') : ''}
+            ${chip(x.league.ok, esc(x.league.v), 'League of current club')}
+            ${chip(x.shared.length > 0, x.shared.length ? `🤝 ${x.shared.map(esc).join(', ')}` : 'No clubs in common', 'Clubs in common')}</div>
+        </div>`).join('')}</div>`;
+    },
+  },
+
+  top10: {
+    render(el, v) {
+      el.innerHTML = `<h3 class="center">${esc(v.title)}</h3>
+        <ol class="top">${v.rows.map(r => `<li class="${r.name ? (r.found ? 'found' : 'missed') : ''}"><span class="rk">${r.rank}</span>
+          <span class="hint">${r.nat ? flag(r.nat) + ' ' : ''}${esc(r.hint)}</span><b>${r.name ? esc(r.name) : ''}</b><span class="v">${r.v ?? ''}</span></li>`).join('')}</ol>
+        <p class="center muted small">Lives: ${'❤️'.repeat(v.lives)}${'🤍'.repeat(Math.max(0, 3 - v.lives))}${v.wrong.length ? ` · not on the list: ${v.wrong.map(esc).join(', ')}` : ''}</p>`;
+    },
+  },
+};
 
 // ---------- boards: build DOM once, then draw() only touches what changed; draw() -> { win, rules } ----------
 const COLORS = ['#f9c7a8', '#b9d6f2', '#c8e6b0', '#f5e19a', '#d9c2ef', '#f2b8c6', '#a8e3d8', '#e0e0e0', '#ffd8a8', '#c5cae9', '#dcedc8'];

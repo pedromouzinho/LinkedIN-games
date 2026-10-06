@@ -6,6 +6,7 @@ import { readFile } from 'node:fs/promises';
 import { Firestore, FieldValue } from '@google-cloud/firestore';
 import { OAuth2Client } from 'google-auth-library';
 import * as G from './games.js';
+import { FOOTBALL as F, PLAYER_INDEX } from './football.js';
 
 const { PORT = 8080, GOOGLE_CLIENT_ID = '', DEV_LOGIN, K_SERVICE } = process.env;
 if (DEV_LOGIN && K_SERVICE) throw new Error('DEV_LOGIN must never be enabled on Cloud Run');
@@ -15,7 +16,7 @@ if (!SECRET) throw new Error('Set SECRET (a long random string) — it signs ses
 const TZ = 'Europe/Lisbon', LAUNCH = '2026-10-01';
 const db = new Firestore({ projectId: process.env.GOOGLE_CLOUD_PROJECT || 'demo-grid-games', ignoreUndefinedProperties: true });
 const google = new OAuth2Client();
-const GAMES = Object.keys(G.GENERATORS);
+const GAMES = [...Object.keys(G.GENERATORS), ...Object.keys(F)];
 const STATIC = { '/': 'index.html', '/app.js': 'app.js', '/games.js': 'games.js', '/style.css': 'style.css' };
 const TYPES = { html: 'text/html', js: 'text/javascript', css: 'text/css' };
 
@@ -44,7 +45,7 @@ async function puzzle(day, game) {
     const ref = db.doc(`puzzles/${key}`);
     const snap = await ref.get();
     if (snap.exists) return JSON.parse(snap.get('json'));
-    const p = G.GENERATORS[game](G.rng(hmac(`puzzle:${key}`).readInt32LE(0)));
+    const p = (G.GENERATORS[game] || F[game].gen)(G.rng(hmac(`puzzle:${key}`).readInt32LE(0)));
     await ref.create({ json: JSON.stringify(p) }).catch(() => {}); // another instance won the race: use theirs
     return JSON.parse((await ref.get()).get('json'));
   })().catch(e => { cache.delete(key); throw e; }));
@@ -113,7 +114,7 @@ async function summary(uid, game, day) {
   const g = mine.filter(p => p.game === game), wins = g.filter(p => p.won !== false), r = runs(wins.map(p => p.day));
   const others = field.docs.map(d => d.data()).filter(p => p.secs != null && p.won !== false && p.uid !== uid);
   return {
-    secs: play.secs, won: play.won !== false, score: play.score ?? null, hints: play.hints || 0, reveal: play.reveal ?? null,
+    secs: play.secs, won: play.won !== false, score: play.score ?? null, hints: play.hints || 0, share: play.share ?? null,
     streak: runs(mine.filter(p => p.won !== false).map(p => p.day)).cur,
     stats: { played: g.length, winPct: Math.round((100 * wins.length) / g.length), best: wins.length ? Math.min(...wins.map(p => p.secs)) : null, streak: r.cur, maxStreak: r.max },
     week: Array.from({ length: 7 }, (_, i) => shift(day, i - 6)).map(d => ({ day: d, won: wins.some(p => p.day === d) })),
@@ -128,14 +129,37 @@ async function leaderboard(uid, day) {
   // ponytail: reads every play of the day; switch to `where('uid','in',...)` chunks once a day has thousands of plays
   const plays = (await db.collection('plays').where('day', '==', day).get()).docs.map(d => d.data()).filter(p => circle.has(p.uid) && p.secs != null);
   const users = new Map(await Promise.all([...new Set(plays.map(p => p.uid))].map(async id => [id, (await userDoc(id).get()).data()])));
-  return Object.fromEntries(GAMES.map(g => [g, plays.filter(p => p.game === g).sort((a, b) => a.secs - b.secs)
-    .map(p => ({ ...brief(p.uid, users.get(p.uid)), secs: p.secs, hints: p.hints || 0, me: p.uid === uid }))]));
+  const order = (a, b) => (b.won !== false) - (a.won !== false) || (b.score ?? 0) - (a.score ?? 0) || a.secs - b.secs;
+  return Object.fromEntries(GAMES.map(g => [g, plays.filter(p => p.game === g).sort(order)
+    .map(p => ({ ...brief(p.uid, users.get(p.uid)), secs: p.secs, won: p.won !== false, score: p.score ?? null, hints: p.hints || 0, me: p.uid === uid }))]));
 }
 
 async function login(res, secure, uid, profile) {
   await userDoc(uid).set(profile, { merge: true });
   res.setHeader('Set-Cookie', sessionCookie(uid, secure));
   return { ok: true };
+}
+
+// ---------- football: the server keeps each play's state; the browser only sends actions ----------
+const stateRef = (day, game, uid) => (day === today() ? playRef(day, game, uid) : db.doc(`practice/${day}_${game}_${uid}`));
+const elapsedOf = d => Math.floor(((d.solvedAt || Date.now()) - d.started) / 1000);
+
+// Apply one action (or just time running out) inside a transaction; finishing records time, result and share line.
+async function footballStep(uid, game, day, action) {
+  const p = await puzzle(day, game), ref = stateRef(day, game, uid);
+  return db.runTransaction(async tx => {
+    const d = (await tx.get(ref)).data();
+    if (!d) throw Object.assign(new Error('open the puzzle first'), { status: 409 });
+    let state = d.state ? JSON.parse(d.state) : F[game].init(p), reply = null;
+    const elapsed = elapsedOf(d), expired = F[game].limit && elapsed > F[game].limit;
+    if (!state.done && (action || expired)) {
+      ({ state, reply = null } = F[game].move(p, state, action || {}, elapsed));
+      const upd = { state: JSON.stringify(state) };
+      if (state.done) Object.assign(upd, { solvedAt: Date.now(), secs: Math.max(1, elapsed), won: state.won, score: state.score, share: F[game].share(p, state) });
+      tx.update(ref, upd);
+    }
+    return { reply, done: !!state.done, won: !!state.won, view: F[game].view(p, state, elapsed), elapsed };
+  });
 }
 
 // ---------- routes ----------
@@ -181,7 +205,14 @@ const routes = {
   'GET /api/leaderboard': async ({ uid }) => leaderboard(uid, today()),
   'GET /api/result': async ({ uid, game }) => summary(uid, game, today()),
 
+  'GET /api/players': async ({ res }) => { res.setHeader('Cache-Control', 'private, max-age=3600'); return PLAYER_INDEX; },
+
   'GET /api/puzzle': async ({ uid, game, day }) => {
+    if (F[game]) {
+      await stateRef(day, game, uid).create({ uid, day, game, started: Date.now(), secs: null }).catch(() => {});
+      const step = await footballStep(uid, game, day, null);
+      return { game, day, num: dayNum(day), football: true, ...step, play: day === today() ? { elapsed: step.elapsed } : null };
+    }
     const p = await puzzle(day, game);
     let play = null;
     if (day === today()) { // timer starts the first time today's puzzle is opened, on the server clock
@@ -193,6 +224,7 @@ const routes = {
     return { game, day, num: dayNum(day), puzzle: publicPuzzle(p), play };
   },
   'POST /api/solve': async ({ uid, game, day, body }) => {
+    if (!checkers[game]) throw Object.assign(new Error('not a logic puzzle'), { status: 400 });
     const p = await puzzle(day, game);
     if (!checkers[game](p, body.answer).win) return { win: false };
     if (day !== today()) return { win: true, practice: true };
@@ -205,7 +237,13 @@ const routes = {
     });
     return { win: true, ...(await summary(uid, game, day)) };
   },
+  'POST /api/move': async ({ uid, game, day, body }) => {
+    if (!F[game]) throw Object.assign(new Error('not a football game'), { status: 400 });
+    const step = await footballStep(uid, game, day, body.action && typeof body.action === 'object' ? body.action : {});
+    return step.done && day === today() ? { ...step, result: await summary(uid, game, day) } : step;
+  },
   'POST /api/hint': async ({ uid, game, day, body }) => {
+    if (!checkers[game]) throw Object.assign(new Error('no hints in this game'), { status: 400 });
     const p = await puzzle(day, game);
     if (day === today()) await playRef(day, game, uid).update({ hints: FieldValue.increment(1) }).catch(() => {});
     return hint(game, p, body.state);
@@ -226,7 +264,7 @@ async function readBody(req) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   const send = (status, data, type = 'application/json') => {
-    res.writeHead(status, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-cache' });
+    res.writeHead(status, { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': res.getHeader('Cache-Control') || 'no-cache' });
     res.end(type === 'application/json' ? JSON.stringify(data) : data);
   };
   try {
@@ -242,7 +280,7 @@ const server = http.createServer(async (req, res) => {
     if (!uid && !PUBLIC.has(route)) return send(401, { error: 'sign in' });
     const body = req.method === 'POST' ? await readBody(req) : {};
     const game = String(url.searchParams.get('game') || body.game || ''), day = String(url.searchParams.get('day') || body.day || today());
-    if (route.match(/puzzle|solve|hint|result/)) {
+    if (route.match(/puzzle|solve|hint|result|move/)) {
       if (!GAMES.includes(game)) return send(400, { error: 'unknown game' });
       if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < LAUNCH || day > today()) return send(400, { error: 'bad day' });
     }

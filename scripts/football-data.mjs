@@ -11,17 +11,22 @@ const HOME_NATIONS = [[/England/, 'GB-ENG'], [/Scotland/, 'GB-SCT'], [/Wales/, '
 const NOT_SENIOR = /under-?\s?\d|\bU-?\d{2}\b|olympic|women|youth|amateur|\bB\b|futsal|beach|universiade|military|student|reserve/i;
 const NOT_FIRST_TEAM = /Castilla|Barcelona Atlètic|Sevilla Atlético|^Jong |Primavera|\bII$|\sB$|\sC$|Youth|Juvenil|Reserves|Academy|\bU-?\d{2}\b|under-\d{2}/i;
 
+const FIX_NAMES = { Q222151: 'João Moutinho' }; // label typos found in Wikidata
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function sparql(query) {
   for (let i = 0; ; i++) {
-    const r = await fetch('https://query.wikidata.org/sparql', {
-      method: 'POST',
-      headers: { 'User-Agent': UA, Accept: 'application/sparql-results+json', 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ query }),
-    });
-    if (r.ok) return (await r.json()).results.bindings.map(b => Object.fromEntries(Object.entries(b).map(([k, v]) => [k, v.value])));
-    if (i >= 4) throw new Error(`${r.status} ${(await r.text()).slice(0, 300)}`);
-    await sleep(5000 * (i + 1));
+    try {
+      const r = await fetch('https://query.wikidata.org/sparql', {
+        method: 'POST',
+        headers: { 'User-Agent': UA, Accept: 'application/sparql-results+json', 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ query }),
+      });
+      if (r.ok) return (await r.json()).results.bindings.map(b => Object.fromEntries(Object.entries(b).map(([k, v]) => [k, v.value])));
+      throw new Error(`${r.status} ${(await r.text()).slice(0, 300)}`);
+    } catch (e) { // HTTP errors, timeouts and dropped connections all get retried
+      if (i >= 4) throw e;
+      await sleep(5000 * (i + 1));
+    }
   }
 }
 const qid = uri => uri.slice(uri.lastIndexOf('/') + 1);
@@ -44,7 +49,7 @@ for (const [lo, hi] of [[30, 45], [45, 70], [70, 100000]]) {
     } GROUP BY ?p ?name ?s`);
   for (const r of rows)
     players.set(qid(r.p), {
-      id: qid(r.p), name: r.name, sl: +r.s, born: year(r.born),
+      id: qid(r.p), name: FIX_NAMES[qid(r.p)] || r.name, sl: +r.s, born: year(r.born),
       h: r.height ? Math.round(+r.height * 100) : null,
       pos: (r.pos || '').split(' ').filter(Boolean).map(u => POS[qid(u)]),
       cit: r.cit || null, stints: [],
@@ -114,7 +119,7 @@ log('leagues', leagues.size);
 
 // ---------- assemble ----------
 const nationOf = t => HOME_NATIONS.find(([re]) => re.test(t.name))?.[1] || t.iso;
-const clubName = t => t.short && t.short.length >= 3 ? t.short
+const clubName = t => t.short && /[a-z]/.test(t.short) ? t.short // a word, not an acronym like "NFO"
   : t.name.replace(/\s+(F\.?C\.?|A\.?F\.?C\.?|C\.?F\.?|S\.?C\.?|FK|SK|S\.?p\.?A\.?|Club de Fútbol|Football Club)$/i, '').trim();
 const clubs = {}, out = [];
 for (const p of players.values()) {
