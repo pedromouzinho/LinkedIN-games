@@ -8,3 +8,9 @@ Same puzzle for everyone each day (seeded by date), every puzzle has a unique so
 
 Social: solve → **Share** copies `Queens #1009 | 1:23 | Name`. Paste friends' shares into
 "Add a connection's result" to build today's leaderboard. Streaks and results live in localStorage.
+
+## Deploy (Google Cloud Run)
+
+```bash
+gcloud run deploy grid-games --source . --region europe-west1 --port 80 --allow-unauthenticated
+```
