@@ -1,9 +1,9 @@
-# Grid Games
+# Games@Work
 
-Daily puzzles in a social-feed layout. Sign in with Google, connect with friends through invite links,
-compare results on a shared leaderboard.
+Two-minute daily puzzles for the office, in a social-feed layout. Sign in with Google, connect with colleagues
+through invite links, compare results on a shared leaderboard.
 
-- **Logic:** Queens, Tango, Zip, Patches, Mini Sudoku.
+- **Logic:** Kings, Solo, Unzip, Holes, Maxi Sudoku.
 - **Football:** Who Am I, Clues, Grid, Links, Bingo, Hot or Cold, Top 10.
 
 `docs/analise-jogos.md` describes the reference games these are modelled on and what each one improves.
@@ -32,15 +32,38 @@ FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 DEV_LOGIN=1 npm start   # http://localhos
 ```
 `DEV_LOGIN=1` adds a name-only login for testing. The server refuses to start with it on Cloud Run.
 
-## Deploy (Cloud Run + Firestore, same project as your other apps)
-1. Firestore: `gcloud firestore databases create --location=europe-west1` (skip if the project already has one).
-2. Google sign-in: Console → APIs & Services → Credentials → Create OAuth client ID → Web application.
-   Add your Cloud Run URL (and any custom domain) to **Authorized JavaScript origins**.
-3. First deploy (sets the config once):
+## Deploy (Cloud Run + Firestore, in a project of its own)
+A separate project keeps Games@Work's data, quotas and bill apart from your other apps.
 ```bash
-gcloud run deploy grid-games --source . --region europe-west1 --allow-unauthenticated \
-  --set-env-vars GOOGLE_CLIENT_ID=<client-id>.apps.googleusercontent.com,SECRET=$(openssl rand -hex 32)
+P=<project-id>; R=europe-west1
+gcloud config set project $P
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com firestore.googleapis.com
+gcloud firestore databases create --location=$R
 ```
-4. Later deploys keep those env vars: `gcloud run deploy grid-games --source . --region europe-west1`.
+1. Google sign-in (Console only): Google Auth Platform → Branding (app name, support email, links to `/privacy` and `/terms`),
+   then Clients → Create client → Web application. Add the Cloud Run URL and your domain to **Authorized JavaScript origins**.
+2. First deploy sets the config once. `--max-instances` caps what a traffic spike can cost:
+```bash
+gcloud run deploy games-at-work --source . --region $R --allow-unauthenticated --max-instances 3 \
+  --set-env-vars "GOOGLE_CLIENT_ID=<id>.apps.googleusercontent.com,SECRET=$(openssl rand -hex 32),CONTACT_EMAIL=<you@example.com>,OPERATOR_NAME=<your name>"
+```
+3. Later deploys keep those env vars: `gcloud run deploy games-at-work --source . --region $R`.
    Never change `SECRET` afterwards: it signs sessions and seeds puzzles.
+4. Your domain:
+```bash
+gcloud domains verify <domain>   # proves you own it (TXT record in your DNS)
+gcloud beta run domain-mappings create --service games-at-work --domain <domain> --region $R
+gcloud beta run domain-mappings describe --domain <domain> --region $R   # the DNS records to add at your registrar
+```
+5. A budget alert (Billing → Budgets & alerts) tells you if costs ever move; it doesn't stop them, `--max-instances` does.
+
+| Env var | |
+|---|---|
+| `SECRET` | required, long random string |
+| `GOOGLE_CLIENT_ID` | OAuth web client ID |
+| `CONTACT_EMAIL`, `OPERATOR_NAME` | shown on `/privacy` and `/terms` (review both texts before launch) |
+| `FIRESTORE_DATABASE` | optional named database, only if you must share a project |
+
 The Cloud Run service account needs the **Cloud Datastore User** role (the default compute account has it).
+Firestore reads stay small: totals, streaks and today's results live on each user's document, so a page costs
+about one read per connection, whatever the history.

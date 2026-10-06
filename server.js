@@ -8,17 +8,21 @@ import { OAuth2Client } from 'google-auth-library';
 import * as G from './games.js';
 import { FOOTBALL as F, PLAYER_INDEX } from './football.js';
 
-const { PORT = 8080, GOOGLE_CLIENT_ID = '', DEV_LOGIN, K_SERVICE } = process.env;
+const { PORT = 8080, GOOGLE_CLIENT_ID = '', DEV_LOGIN, K_SERVICE, CONTACT_EMAIL = '', OPERATOR_NAME = 'the site operator' } = process.env;
 if (DEV_LOGIN && K_SERVICE) throw new Error('DEV_LOGIN must never be enabled on Cloud Run');
 const SECRET = process.env.SECRET || (DEV_LOGIN ? 'dev-secret' : null);
 if (!SECRET) throw new Error('Set SECRET (a long random string) — it signs sessions and seeds puzzles');
 
 const TZ = 'Europe/Lisbon', LAUNCH = '2026-10-01';
-const db = new Firestore({ projectId: process.env.GOOGLE_CLOUD_PROJECT || 'demo-grid-games', ignoreUndefinedProperties: true });
+const db = new Firestore({ projectId: process.env.GOOGLE_CLOUD_PROJECT || 'demo-grid-games',
+  databaseId: process.env.FIRESTORE_DATABASE || '(default)', ignoreUndefinedProperties: true });
 const google = new OAuth2Client();
 const GAMES = [...Object.keys(G.GENERATORS), ...Object.keys(F)];
-const STATIC = { '/': 'index.html', '/app.js': 'app.js', '/games.js': 'games.js', '/style.css': 'style.css' };
-const TYPES = { html: 'text/html', js: 'text/javascript', css: 'text/css' };
+const STATIC = { '/': 'index.html', '/app.js': 'app.js', '/games.js': 'games.js', '/style.css': 'style.css', '/privacy': 'privacy.html', '/terms': 'terms.html',
+  '/icon.svg': 'icon.svg', '/icon-192.png': 'icon-192.png', '/icon-512.png': 'icon-512.png', '/og.jpg': 'og.jpg', '/manifest.webmanifest': 'manifest.webmanifest' };
+const TYPES = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', svg: 'image/svg+xml',
+  png: 'image/png', jpg: 'image/jpeg', webmanifest: 'application/manifest+json' };
+const escHtml = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
 const dayNum = day => Math.round((Date.parse(day) - Date.parse('2024-01-01')) / 864e5);
@@ -94,44 +98,63 @@ const playRef = (day, game, uid) => db.doc(`plays/${day}_${game}_${uid}`);
 const brief = (uid, u) => ({ uid, name: u?.name || '?', picture: u?.picture || '' });
 
 const shift = (day, n) => new Date(Date.parse(day) + n * 864e5).toISOString().slice(0, 10);
-// Current streak (ending today, or yesterday if today isn't won yet) and longest streak over a list of won days.
-function runs(days) {
-  const set = new Set(days);
-  let cur = 0, max = 0;
-  for (let d = set.has(today()) ? today() : shift(today(), -1); set.has(d); d = shift(d, -1)) cur++;
-  for (const d of set) if (!set.has(shift(d, -1))) { let k = 1; while (set.has(shift(d, k))) k++; max = Math.max(max, k); }
-  return { cur, max };
+
+// Running totals live on the user doc, so every page costs a handful of reads however long someone has played:
+// stats.<game> = { played, wins, best, cur, max, last, recent }, streak = { cur, max, last }, today = { day, results }.
+const live = s => (s && (s.last === today() || s.last === shift(today(), -1)) ? s.cur : 0); // a streak survives until a day is missed
+function bump(s = {}, day, won, secs) {
+  const n = { played: (s.played || 0) + 1, wins: (s.wins || 0) + (won ? 1 : 0), best: s.best ?? null, cur: s.cur || 0, max: s.max || 0, last: s.last ?? null, recent: s.recent || [] };
+  if (!won) return n;
+  if (n.last !== day) n.cur = n.last === shift(day, -1) ? n.cur + 1 : 1;
+  return { ...n, best: n.best == null ? secs : Math.min(n.best, secs), max: Math.max(n.max, n.cur), last: day,
+    recent: [...n.recent.filter(d => d >= shift(day, -13) && d !== day), day] };
 }
-const finished = async uid => (await db.collection('plays').where('uid', '==', uid).get()).docs.map(d => d.data()).filter(p => p.secs != null);
-const streak = async uid => runs((await finished(uid)).filter(p => p.won !== false).map(p => p.day)).cur;
+// Inside the transaction that finishes today's play (the user doc must have been read in it first).
+function record(tx, uid, user, day, game, result) {
+  const g = bump(user.stats?.[game], day, result.won, result.secs), { cur, max, last } = bump(user.streak, day, result.won, result.secs);
+  const results = user.today?.day === day ? user.today.results : {};
+  tx.update(userDoc(uid), { [`stats.${game}`]: g, streak: { cur, max, last }, today: { day, results: { ...results, [game]: result } } });
+}
+
+// Today's times of everyone who finished a game, for "faster than X%". Cached a minute per instance.
+const fieldCache = new Map();
+async function field(day, game) {
+  const key = `${day}_${game}`, hit = fieldCache.get(key);
+  if (hit && Date.now() - hit.at < 60e3) return hit.list;
+  // ponytail: reads every finished play of the game once a minute; keep a running histogram once days reach ~10k players
+  const list = (await db.collection('plays').where('day', '==', day).where('game', '==', game).get()).docs
+    .map(d => d.data()).filter(p => p.secs != null && p.won !== false).map(p => ({ uid: p.uid, secs: p.secs }));
+  for (const k of fieldCache.keys()) if (!k.startsWith(day)) fieldCache.delete(k);
+  fieldCache.set(key, { at: Date.now(), list });
+  return list;
+}
 
 // Everything the results page shows for one finished play.
 async function summary(uid, game, day) {
-  const [mine, board, field] = await Promise.all([finished(uid), leaderboard(uid, day),
-    db.collection('plays').where('day', '==', day).where('game', '==', game).get()]);
-  const play = mine.find(p => p.day === day && p.game === game);
-  if (!play) throw Object.assign(new Error('not finished yet'), { status: 409 });
-  const g = mine.filter(p => p.game === game), wins = g.filter(p => p.won !== false), r = runs(wins.map(p => p.day));
-  const others = field.docs.map(d => d.data()).filter(p => p.secs != null && p.won !== false && p.uid !== uid);
+  const [usnap, psnap] = await db.getAll(userDoc(uid), playRef(day, game, uid));
+  const u = usnap.data() || {}, play = psnap.data();
+  if (!play || play.secs == null) throw Object.assign(new Error('not finished yet'), { status: 409 });
+  const [board, everyone] = await Promise.all([leaderboard(uid, day, u), field(day, game)]);
+  const st = u.stats?.[game] || {}, won = play.won !== false, others = everyone.filter(p => p.uid !== uid);
   return {
-    secs: play.secs, won: play.won !== false, score: play.score ?? null, hints: play.hints || 0, share: play.share ?? null,
-    streak: runs(mine.filter(p => p.won !== false).map(p => p.day)).cur,
-    stats: { played: g.length, winPct: Math.round((100 * wins.length) / g.length), best: wins.length ? Math.min(...wins.map(p => p.secs)) : null, streak: r.cur, maxStreak: r.max },
-    week: Array.from({ length: 7 }, (_, i) => shift(day, i - 6)).map(d => ({ day: d, won: wins.some(p => p.day === d) })),
-    pct: play.won !== false && others.length ? Math.round((100 * others.filter(p => p.secs > play.secs).length) / others.length) : null,
+    secs: play.secs, won, score: play.score ?? null, hints: play.hints || 0, share: play.share ?? null, streak: live(u.streak),
+    stats: { played: st.played || 0, winPct: st.played ? Math.round((100 * st.wins) / st.played) : 0, best: st.best ?? null, streak: live(st), maxStreak: st.max || 0 },
+    week: Array.from({ length: 7 }, (_, i) => shift(day, i - 6)).map(d => ({ day: d, won: (st.recent || []).includes(d) })),
+    pct: won && others.length ? Math.round((100 * others.filter(p => p.secs > play.secs).length) / others.length) : null,
     board: board[game],
   };
 }
 
-async function leaderboard(uid, day) {
-  const me = (await userDoc(uid).get()).data() || {};
-  const circle = new Set([uid, ...(me.connections || [])]);
-  // ponytail: reads every play of the day; switch to `where('uid','in',...)` chunks once a day has thousands of plays
-  const plays = (await db.collection('plays').where('day', '==', day).get()).docs.map(d => d.data()).filter(p => circle.has(p.uid) && p.secs != null);
-  const users = new Map(await Promise.all([...new Set(plays.map(p => p.uid))].map(async id => [id, (await userDoc(id).get()).data()])));
-  const order = (a, b) => (b.won !== false) - (a.won !== false) || (b.score ?? 0) - (a.score ?? 0) || a.secs - b.secs;
-  return Object.fromEntries(GAMES.map(g => [g, plays.filter(p => p.game === g).sort(order)
-    .map(p => ({ ...brief(p.uid, users.get(p.uid)), secs: p.secs, won: p.won !== false, score: p.score ?? null, hints: p.hints || 0, me: p.uid === uid }))]));
+// Your circle's results today, straight from their user docs: 1 + connections reads.
+async function leaderboard(uid, day, me) {
+  me ??= (await userDoc(uid).get()).data() || {};
+  const others = me.connections?.length ? await db.getAll(...me.connections.map(userDoc)) : [];
+  const people = [[uid, me], ...others.map(d => [d.id, d.data()])].filter(([, u]) => u?.today?.day === day);
+  const order = (a, b) => b.won - a.won || (b.score ?? 0) - (a.score ?? 0) || a.secs - b.secs;
+  return Object.fromEntries(GAMES.map(g => [g, people.filter(([, u]) => u.today.results[g]).map(([id, u]) => {
+    const r = u.today.results[g];
+    return { ...brief(id, u), secs: r.secs, won: r.won !== false, score: r.score ?? null, hints: r.hints || 0, me: id === uid };
+  }).sort(order)]));
 }
 
 async function login(res, secure, uid, profile) {
@@ -148,7 +171,7 @@ const elapsedOf = d => Math.floor(((d.solvedAt || Date.now()) - d.started) / 100
 async function footballStep(uid, game, day, action) {
   const p = await puzzle(day, game), ref = stateRef(day, game, uid);
   return db.runTransaction(async tx => {
-    const d = (await tx.get(ref)).data();
+    const [snap, usnap] = await tx.getAll(ref, userDoc(uid)), d = snap.data();
     if (!d) throw Object.assign(new Error('open the puzzle first'), { status: 409 });
     let state = d.state ? JSON.parse(d.state) : F[game].init(p), reply = null;
     const elapsed = elapsedOf(d), expired = F[game].limit && elapsed > F[game].limit;
@@ -157,6 +180,7 @@ async function footballStep(uid, game, day, action) {
       const upd = { state: JSON.stringify(state) };
       if (state.done) Object.assign(upd, { solvedAt: Date.now(), secs: Math.max(1, elapsed), won: state.won, score: state.score, share: F[game].share(p, state) });
       tx.update(ref, upd);
+      if (state.done && day === today() && usnap.exists) record(tx, uid, usnap.data(), day, game, { secs: upd.secs, won: !!state.won, score: state.score });
     }
     return { reply, done: !!state.done, won: !!state.won, view: F[game].view(p, state, elapsed), elapsed };
   });
@@ -181,11 +205,22 @@ const routes = {
 
   'GET /api/me': async ({ uid }) => {
     const u = (await userDoc(uid).get()).data();
-    const played = Object.fromEntries(await Promise.all(GAMES.map(async g => {
-      const d = (await playRef(today(), g, uid).get()).data();
-      return [g, d?.secs != null ? { secs: d.secs, won: d.won !== false, score: d.score ?? null } : null];
-    })));
-    return { ...brief(uid, u), streak: await streak(uid), played, connections: u?.connections || [] };
+    if (!u) throw Object.assign(new Error('sign in'), { status: 401 }); // account deleted on another device
+    const res = u.today?.day === today() ? u.today.results : {};
+    const played = Object.fromEntries(GAMES.map(g => [g, res[g] ? { secs: res[g].secs, won: res[g].won !== false, score: res[g].score ?? null } : null]));
+    return { ...brief(uid, u), streak: live(u.streak), played, connections: u.connections || [] };
+  },
+  // GDPR erasure: the account, every play, and the links other people had to it.
+  'POST /api/delete-account': async ({ uid, res }) => {
+    const [plays, practice, fans] = await Promise.all(['plays', 'practice'].map(c => db.collection(c).where('uid', '==', uid).get())
+      .concat(db.collection('users').where('connections', 'array-contains', uid).get()));
+    const w = db.bulkWriter();
+    [...plays.docs, ...practice.docs].forEach(d => w.delete(d.ref));
+    fans.docs.forEach(d => w.update(d.ref, { connections: FieldValue.arrayRemove(uid) }));
+    w.delete(userDoc(uid));
+    await w.close();
+    res.setHeader('Set-Cookie', 'sid=; Path=/; Max-Age=0');
+    return { ok: true };
   },
   'GET /api/user': async ({ query }) => {
     const id = String(query.get('uid') || '');
@@ -229,11 +264,12 @@ const routes = {
     if (!checkers[game](p, body.answer).win) return { win: false };
     if (day !== today()) return { win: true, practice: true };
     await db.runTransaction(async tx => {
-      const ref = playRef(day, game, uid), d = (await tx.get(ref)).data();
+      const ref = playRef(day, game, uid), [snap, usnap] = await tx.getAll(ref, userDoc(uid)), d = snap.data();
       if (!d) throw Object.assign(new Error('open the puzzle first'), { status: 409 });
       if (d.secs != null) return; // first solve counts
-      const now = Date.now();
-      tx.update(ref, { secs: Math.max(1, Math.round((now - d.started) / 1000)), solvedAt: now, won: true });
+      const now = Date.now(), secs = Math.max(1, Math.round((now - d.started) / 1000));
+      tx.update(ref, { secs, solvedAt: now, won: true });
+      if (usnap.exists) record(tx, uid, usnap.data(), day, game, { secs, won: true, hints: d.hints || 0 });
     });
     return { win: true, ...(await summary(uid, game, day)) };
   },
@@ -269,8 +305,16 @@ const server = http.createServer(async (req, res) => {
   };
   try {
     if (req.method === 'GET' && STATIC[url.pathname]) {
-      const f = STATIC[url.pathname];
-      return send(200, await readFile(new URL(f, import.meta.url)), `${TYPES[f.split('.').pop()]}; charset=utf-8`);
+      const f = STATIC[url.pathname], type = TYPES[f.split('.').pop()];
+      if (type.startsWith('image') || f.endsWith('webmanifest')) res.setHeader('Cache-Control', 'public, max-age=86400');
+      if (!f.endsWith('.html')) return send(200, await readFile(new URL(f, import.meta.url)), type);
+      // pages carry the site's own address (share previews need absolute URLs); invite links name the inviter
+      const origin = `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host}`;
+      let title = 'Games@Work: two-minute daily puzzles', inv = url.searchParams.get('invite');
+      if (inv && /^[\w-]{1,64}$/.test(inv)) { const u = (await userDoc(inv).get()).data(); if (u) title = `${u.name} invited you to Games@Work`; }
+      const contact = CONTACT_EMAIL ? `<a href="mailto:${escHtml(CONTACT_EMAIL)}">${escHtml(CONTACT_EMAIL)}</a>` : 'the contact address the operator publishes';
+      const html = (await readFile(new URL(f, import.meta.url), 'utf8')).replaceAll('%ORIGIN%', escHtml(origin)).replaceAll('%TITLE%', escHtml(title)).replaceAll('%CONTACT%', contact).replaceAll('%OPERATOR%', escHtml(OPERATOR_NAME));
+      return send(200, html, type);
     }
     const route = `${req.method} ${url.pathname}`, fn = routes[route];
     if (!fn) return send(404, { error: 'not found' });

@@ -3,15 +3,28 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Grid Games</title>
-  <link rel="icon" href="data:,">
+  <title>Games@Work</title>
+  <meta name="description" content="Two-minute daily puzzles, logic and football. Play with your colleagues and keep your streak.">
+  <meta name="theme-color" content="#4f46e5">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Games@Work">
+  <meta property="og:title" content="%TITLE%">
+  <meta property="og:description" content="Two-minute daily puzzles, logic and football. Play with your colleagues and keep your streak.">
+  <meta property="og:image" content="%ORIGIN%/og.jpg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:url" content="%ORIGIN%/">
+  <meta name="twitter:card" content="summary_large_image">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="nav">
     <div class="wrap">
-      <a class="logo" href="/">GG</a>
-      <strong>Grid Games</strong>
+      <a class="logo" href="/" aria-label="Games@Work home">G@W</a>
+      <strong>Games@Work</strong>
       <span class="muted" id="today"></span>
     </div>
   </header>
@@ -20,6 +33,10 @@
     <section id="center"><div class="card muted">Loading…</div></section>
     <aside id="right"></aside>
   </main>
+  <footer class="wrap foot">
+    <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a> · Football data from <a href="https://www.wikidata.org/" rel="noopener">Wikidata</a> ·
+    Not affiliated with LinkedIn or any football club.
+  </footer>
   <div id="toast" role="status"></div>
   <script type="module" src="app.js"></script>
 </body>

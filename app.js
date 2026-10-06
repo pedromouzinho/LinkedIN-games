@@ -1,6 +1,7 @@
 import * as G from './games.js';
 
 const $ = s => document.querySelector(s);
+const LOCALE = 'en-GB'; // the site is in English whatever the browser's language
 const pad = n => String(n).padStart(2, '0');
 const fmt = s => `${Math.floor(s / 60)}:${pad(s % 60)}`;
 const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
@@ -13,6 +14,7 @@ const store = {
 };
 let toastTimer;
 const toast = msg => { $('#toast').textContent = msg; $('#toast').className = 'show'; clearTimeout(toastTimer); toastTimer = setTimeout(() => ($('#toast').className = ''), 2200); };
+addEventListener('unhandledrejection', e => toast(e.reason?.message || 'Something went wrong')); // failed clicks say so
 
 async function api(path, body) {
   const r = await fetch(path, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {});
@@ -32,17 +34,17 @@ function ask(title, text, action) {
 }
 
 const GAMES = {
-  queens: { title: 'Queens', icon: '👑', theme: '#6f4bb7',
-    rules: 'One ♛ in each row, column and color region. Queens can’t touch, not even diagonally. Tap for ✕, tap again for ♛. Drag to mark ✕.',
-    msgs: { row: 'Each row can only have one ♛.', col: 'Each column can only have one ♛.', region: 'Each color region can only have one ♛.', touch: 'Two ♛ can’t touch, not even diagonally.' } },
-  tango: { title: 'Tango', icon: '🌗', theme: '#22314f',
+  queens: { title: 'Kings', icon: '👑', theme: '#6f4bb7',
+    rules: 'One ♚ in each row, column and color region. Kings can’t touch, not even diagonally. Tap for ✕, tap again for ♚. Drag to mark ✕.',
+    msgs: { row: 'Each row can only have one ♚.', col: 'Each column can only have one ♚.', region: 'Each color region can only have one ♚.', touch: 'Two ♚ can’t touch, not even diagonally.' } },
+  tango: { title: 'Solo', icon: '🌗', theme: '#22314f',
     rules: 'Fill with suns and moons. Each row and column has 3 of each, never 3 in a row. = means same, × means opposite.',
     msgs: { three: 'No more than 2 ☀ or ☾ can be next to each other.', count: 'Each row and column has exactly 3 ☀ and 3 ☾.', sign: 'Cells joined by = must match, cells joined by × must differ.' } },
-  zip: { title: 'Zip', icon: '🔗', theme: '#d9541e', rules: 'Drag one path through the numbers in order. Fill every cell. Thick lines are walls.' },
-  patches: { title: 'Patches', icon: '🧩', theme: '#c2417a',
-    rules: 'Split the grid into rectangles. Each one covers exactly one clue and takes its shape (square, wide, tall or any); a number is its area. Drag to draw, tap a patch to remove it.',
-    msgs: { clues: 'Each patch must cover exactly one clue.', shape: 'A patch must have the shape shown on its clue.', size: 'A patch’s area must match its number.' } },
-  sudoku: { title: 'Mini Sudoku', icon: '🔢', theme: '#2f8f5b',
+  zip: { title: 'Unzip', icon: '🔗', theme: '#d9541e', rules: 'Drag one path through the numbers in order. Fill every cell. Thick lines are walls.' },
+  patches: { title: 'Holes', icon: '🕳️', theme: '#c2417a',
+    rules: 'Fill the grid with rectangles. Each one covers exactly one clue and takes its shape (square, wide, tall or any); a number is its area. Drag to draw, tap a rectangle to remove it.',
+    msgs: { clues: 'Each rectangle must cover exactly one clue.', shape: 'A rectangle must have the shape shown on its clue.', size: 'A rectangle’s area must match its number.' } },
+  sudoku: { title: 'Maxi Sudoku', icon: '🔢', theme: '#2f8f5b',
     rules: 'Fill 1–6 so every row, column and 2×3 box has each number once. Turn on ✏️ Notes to pencil in candidates.',
     msgs: { row: 'Each row can only have one of each number.', col: 'Each column can only have one of each number.', box: 'Each 2×3 box can only have one of each number.' } },
 };
@@ -71,7 +73,7 @@ const inviteLink = () => `${location.origin}/?invite=${me.uid}`;
 // ---------- shell ----------
 async function boot() {
   cfg = await api('/api/config');
-  $('#today').textContent = new Date(cfg.day + 'T12:00').toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  $('#today').textContent = new Date(cfg.day + 'T12:00').toLocaleDateString(LOCALE, { weekday: 'long', month: 'long', day: 'numeric' });
   me = await api('/api/me').catch(e => { if (e.status === 401) return null; throw e; });
   if (!me) return signIn();
   left();
@@ -84,9 +86,10 @@ async function boot() {
 function signIn() {
   $('#left').innerHTML = $('#right').innerHTML = '';
   $('#center').innerHTML = `<div class="card hero">
-    <h2>Daily puzzles with your network</h2>
-    <p class="muted">Quick puzzles, new every day. Keep your streak and see how your connections did.</p>
+    <h2>Two-minute puzzles at work</h2>
+    <p class="muted">Logic and football puzzles, new every day. Keep your streak and see how your colleagues did.</p>
     <div id="gbtn"></div>
+    <p class="muted small">By continuing you agree to the <a href="/terms">Terms</a> and the <a href="/privacy">Privacy</a> page.</p>
     ${cfg.devLogin ? `<form id="dev" class="row"><input name="name" placeholder="Name (dev login)" required maxlength="30"><button class="btn">Sign in</button></form>` : ''}
     ${!cfg.clientId && !cfg.devLogin ? '<p class="bad-text">Sign-in is not configured (GOOGLE_CLIENT_ID).</p>' : ''}
   </div>`;
@@ -109,9 +112,17 @@ function left() {
     <p class="muted">🔥 <b>${me.streak}</b>-day streak · ${me.connections.length} connection${me.connections.length === 1 ? '' : 's'}</p>
     <button class="btn" id="invite">Invite connections</button>
     <button class="btn ghost small" id="logout">Sign out</button>
+    <button class="link small muted" id="delete">Delete account</button>
   </div>`;
-  $('#invite').onclick = () => share(`Play Grid Games with me: ${inviteLink()}`, 'Invite link copied');
+  $('#invite').onclick = () => share(`Play Games@Work with me: ${inviteLink()}`, 'Invite link copied');
   $('#logout').onclick = async () => { await api('/api/logout', {}); boot(); };
+  $('#delete').onclick = async () => {
+    if (!(await ask('Delete your account?', 'This removes your profile, every result and your connections, right away. It can’t be undone.', 'Delete'))) return;
+    await api('/api/delete-account', {});
+    try { localStorage.clear(); } catch {} // unfinished moves kept on this device
+    toast('Your account was deleted');
+    boot();
+  };
 }
 
 const lbRows = rows => rows.map(r => `<li class="${r.me ? 'me' : ''}${r.won === false ? ' lost' : ''}">${avatar(r)}<span class="nm">${esc(r.name)}</span>${r.hints ? `<i title="hints used">💡${r.hints}</i>` : ''}<b>${r.won === false ? '✗' : fmt(r.secs)}</b></li>`).join('');
@@ -157,7 +168,7 @@ function home() {
     <h3 class="sec">🧠 Logic</h3>${logic.map(tile).join('')}
     <h3 class="sec">⚽ Football</h3>${ball.map(tile).join('')}
     ${past.length ? `<div class="card"><h3>Archive</h3><p class="muted small">Practice past puzzles. They don’t count for the leaderboard.</p>
-      ${past.map(day => `<div class="arch"><span>${new Date(day + 'T12:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</span>
+      ${past.map(day => `<div class="arch"><span>${new Date(day + 'T12:00').toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' })}</span>
         ${Object.entries(GAMES).map(([id, g]) => `<button class="btn ghost small" data-game="${id}" data-day="${day}" title="${g.title}">${g.icon}</button>`).join('')}</div>`).join('')}</div>` : ''}`;
   $('#center').onclick = openTile;
 }
@@ -285,14 +296,14 @@ async function result(id, day, res) {
     <div class="stats">${[[s.played, 'played'], [s.winPct + '%', 'win rate'], [s.best != null ? fmt(s.best) : '–', 'best time'], [s.maxStreak, 'max streak']]
       .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('')}</div>
     <div class="week"><b>🔥 ${s.streak}-day ${g.title} streak</b><div>${res.week.map(w =>
-      `<span class="${w.won ? 'on' : ''}" title="${w.day}">${new Date(w.day + 'T12:00').toLocaleDateString(undefined, { weekday: 'narrow' })}</span>`).join('')}</div></div>
+      `<span class="${w.won ? 'on' : ''}" title="${w.day}">${new Date(w.day + 'T12:00').toLocaleDateString(LOCALE, { weekday: 'narrow' })}</span>`).join('')}</div></div>
     ${others.length ? `<h3>Play another</h3><div id="more">${others.map(tile).join('')}</div>` : ''}
     <div class="row center"><button class="btn ghost" id="next">All puzzles</button></div>
   </div>`;
   $('#next').onclick = home;
   $('#share').onclick = () => share(text, 'Result copied');
   $('#copy').onclick = () => copy(text, 'Result copied');
-  $('#inv')?.addEventListener('click', () => share(`Play Grid Games with me: ${inviteLink()}`, 'Invite link copied'));
+  $('#inv')?.addEventListener('click', () => share(`Play Games@Work with me: ${inviteLink()}`, 'Invite link copied'));
   $('#more')?.addEventListener('click', openTile);
 }
 
@@ -305,7 +316,7 @@ async function share(text, copied) {
 
 // ---------- football: shared frame, player search, one renderer per game ----------
 const HOME_NATIONS = { 'GB-ENG': 'England', 'GB-SCT': 'Scotland', 'GB-WLS': 'Wales', 'GB-NIR': 'Northern Ireland' };
-const regionName = new Intl.DisplayNames(undefined, { type: 'region' });
+const regionName = new Intl.DisplayNames(LOCALE, { type: 'region' });
 const nation = c => (c ? HOME_NATIONS[c] || regionName.of(c.slice(0, 2)) : '');
 const flag = c => !c ? '' : c.startsWith('GB-')
   ? '🏴' + [...('gb' + c.slice(3).toLowerCase())].map(ch => String.fromCodePoint(0xe0000 + ch.charCodeAt(0))).join('') + '\u{e007f}'
@@ -540,7 +551,7 @@ const BOARDS = {
     return {
       draw() {
         const rules = G.queensRules(p, queens()), bad = new Set(rules.flatMap(v => v.bad));
-        cells.forEach((c, i) => { setText(c, ['', '✕', '♛'][marks[i]]); c.classList.toggle('q', marks[i] === 2); c.classList.toggle('bad', bad.has(i)); });
+        cells.forEach((c, i) => { setText(c, ['', '✕', '♚'][marks[i]]); c.classList.toggle('q', marks[i] === 2); c.classList.toggle('bad', bad.has(i)); });
         return { win: G.queensCheck(p, queens()).win, rules };
       },
       get: () => marks, set: s => (marks = [...s]), reset: () => marks.fill(0), answer: queens,
