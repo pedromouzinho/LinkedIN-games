@@ -1,5 +1,7 @@
 import * as G from './games.js';
 
+// "gamesatwork.web.app." (trailing dot) gets "Not Secure" in Safari and isn't an allowed sign-in origin: drop the dot.
+if (location.hostname.endsWith('.')) location.replace(location.href.replace(`//${location.hostname}`, `//${location.hostname.slice(0, -1)}`));
 const $ = s => document.querySelector(s);
 const LOCALE = 'en-GB'; // the site is in English whatever the browser's language
 const pad = n => String(n).padStart(2, '0');
