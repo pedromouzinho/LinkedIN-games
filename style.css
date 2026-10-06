@@ -277,3 +277,8 @@ a { color: inherit; }
 .legal { width: min(720px, calc(100% - 16px)); margin: 24px auto; padding: 24px 28px; line-height: 1.55; }
 .legal h1 { margin: 0 0 4px; }
 .legal h2 { margin: 24px 0 6px; font-size: 18px; }
+
+/* player photos (transparent cut-outs on a soft disc) */
+.ph { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; background: var(--given); vertical-align: middle; margin-right: 6px; }
+.ph.big, .face .ph, .now .ph { display: block; width: 64px; height: 64px; margin: 0 auto 4px; }
+.sq .ph { display: block; width: 60%; height: auto; aspect-ratio: 1; margin: 0 auto 2px; }

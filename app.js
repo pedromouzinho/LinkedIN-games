@@ -409,6 +409,7 @@ function playFootball(id, data) {
   if (finished) practice ? end({ elapsed: data.elapsed, won: data.won }) : result(id, data.day, {});
 }
 
+const ph = (url, cls = '') => (url ? `<img class="ph ${cls}" src="${esc(url)}" alt="" loading="lazy">` : '');
 const yrs = (a, b) => (a === b || b === a + 1 ? `${a}` : `${a}–${b ?? 'now'}`);
 const FBOARDS = {
   whoami: {
@@ -417,7 +418,7 @@ const FBOARDS = {
         return c ? `<div class="club">${shirt(c.colors, c.name)}<b>${esc(c.name)}</b><span class="muted small">${yrs(c.from, c.to)}${c.more ? ' +' : ''}</span></div>`
           : `<div class="club empty"><b>${k + 1}</b></div>`; };
       el.innerHTML = `<div class="who">${[0, 1, 3, 2].map(slot).join('')}
-        <div class="face">${v.answer ? `<span class="av big-av">${esc(v.answer.name[0])}</span><b>${esc(v.answer.name)}</b>` : '?'}</div></div>
+        <div class="face">${v.answer ? `${ph(v.answer.photo) || `<span class="av big-av">${esc(v.answer.name[0])}</span>`}<b>${esc(v.answer.name)}</b>` : '?'}</div></div>
         <p class="center muted">I played for these ${v.total} clubs. Who am I?</p>
         ${v.guesses.length ? `<p class="tries">${v.guesses.map(n => `<s>${esc(n || 'skip')}</s>`).join(' ')}</p>` : ''}`;
     },
@@ -432,7 +433,7 @@ const FBOARDS = {
         <div class="statgrid">${v.tiles.map(t => `<div class="stat on">${val(t)}<span>${label[t.k]}</span></div>`).join('')}
         ${v.hidden.map(k => `<div class="stat"><b>?</b><span>${label[k]}</span></div>`).join('')}</div>
         <div class="pills">${Array.from({ length: v.attempts }, (_, i) => `<i class="${i < v.used ? 'used' : ''}"></i>`).join('')}</div>
-        ${v.answer ? `<p class="center reveal">It was <b>${esc(v.answer.name)}</b> ${flag(v.answer.nat)}</p>` : ''}
+        ${v.answer ? `<p class="center reveal">${ph(v.answer.photo, 'big')}It was <b>${esc(v.answer.name)}</b> ${flag(v.answer.nat)}</p>` : ''}
         ${v.guesses.length ? `<p class="tries">${v.guesses.map(n => `<s>${esc(n || 'skip')}</s>`).join(' ')}</p>` : ''}`;
     },
   },
@@ -441,7 +442,7 @@ const FBOARDS = {
     render(el, v, act, local) {
       const head = c => `<div class="hd">${catHtml(c)}</div>`;
       const cell = i => { const c = v.cells[i], pick = local.choices?.includes(i);
-        return `<button class="sq${c ? (c.ok ? ' ok' : ' miss') : ''}${pick ? ' pick' : ''}" data-cell="${i}" ${pick ? '' : 'tabindex="-1"'}>${c ? esc(c.name) : pick ? 'Here?' : ''}</button>`; };
+        return `<button class="sq${c ? (c.ok ? ' ok' : ' miss') : ''}${pick ? ' pick' : ''}" data-cell="${i}" ${pick ? '' : 'tabindex="-1"'}>${c ? ph(c.photo) + esc(c.name) : pick ? 'Here?' : ''}</button>`; };
       el.innerHTML = `<div class="fgrid"><div class="hd corner"><b>${v.guessesLeft}</b><span class="small muted">guesses left</span></div>
         ${v.cats.slice(3).map(head).join('')}
         ${[0, 1, 2].map(r => head(v.cats[r]) + [0, 1, 2].map(c => cell(r * 3 + c)).join('')).join('')}</div>`;
@@ -473,7 +474,7 @@ const FBOARDS = {
     render(el, v, act, local) {
       local.end ??= Date.now() + v.remaining * 1000;
       el.innerHTML = `<div class="bingo-top"><div class="ring" id="ring">${Math.ceil(v.remaining)}</div>
-        <div class="now">${v.current ? `<span class="muted small">Where does he fit?</span><b>${esc(v.current.name)}</b><span class="muted small">${v.left} players left</span>` : '<b>Done</b>'}</div>
+        <div class="now">${v.current ? `<span class="muted small">Where does he fit?</span>${ph(v.current.photo)}<b>${esc(v.current.name)}</b><span class="muted small">${v.left} players left</span>` : '<b>Done</b>'}</div>
         ${v.current ? '<button class="btn small" id="bskip">Skip</button>' : ''}</div>
         <div class="bingo">${v.cats.map((c, i) => `<button class="bq${v.cells[i] ? ' ok' : ''}${v.wrong === i ? ' wrong' : ''}" data-cell="${i}" ${v.cells[i] ? 'disabled' : ''}>
           ${v.cells[i] ? `<b>${esc(v.cells[i])}</b><span class="muted">${esc(c.name)}</span>` : catHtml(c)}</button>`).join('')}</div>`;
@@ -495,10 +496,10 @@ const FBOARDS = {
     render(el, v) {
       const arrow = d => (d > 0 ? '↑' : d < 0 ? '↓' : '=');
       const chip = (ok, html, title) => `<span class="chip ${ok ? 'yes' : 'no'}" title="${title}">${html}</span>`;
-      el.innerHTML = `${v.answer ? `<p class="center reveal">It was <b>${esc(v.answer.name)}</b> ${flag(v.answer.nat)}</p>` : ''}
+      el.innerHTML = `${v.answer ? `<p class="center reveal">${ph(v.answer.photo, 'big')}It was <b>${esc(v.answer.name)}</b> ${flag(v.answer.nat)}</p>` : ''}
         <p class="center muted small">${v.max - v.guesses.length} guesses left · ↑ / ↓: the secret player’s birth year or height is higher / lower</p>
         <div class="hc">${[...v.guesses].reverse().map(x => `<div class="guess">
-          <div class="row"><b>${esc(x.name)}</b><span class="meter"><i style="width:${x.score}%"></i></span><b>${x.score}</b></div>
+          <div class="row"><b>${ph(x.photo)}${esc(x.name)}</b><span class="meter"><i style="width:${x.score}%"></i></span><b>${x.score}</b></div>
           <div class="chips">${chip(x.nat.ok, `${flag(x.nat.v)} ${esc(nation(x.nat.v))}`, 'Nation')}${chip(x.pos.ok, esc(x.pos.v), 'Position')}
             ${chip(x.born.dir === 0, `${x.born.v} ${arrow(x.born.dir)}`, 'Born')}${x.height.v ? chip(x.height.dir === 0, `${x.height.v} cm ${arrow(x.height.dir)}`, 'Height') : ''}
             ${chip(x.league.ok, esc(x.league.v), 'League of current club')}
@@ -511,7 +512,7 @@ const FBOARDS = {
     render(el, v) {
       el.innerHTML = `<h3 class="center">${esc(v.title)}</h3>
         <ol class="top">${v.rows.map(r => `<li class="${r.name ? (r.found ? 'found' : 'missed') : ''}"><span class="rk">${r.rank}</span>
-          <span class="hint">${r.nat ? flag(r.nat) + ' ' : ''}${esc(r.hint)}</span><b>${r.name ? esc(r.name) : ''}</b><span class="v">${r.v ?? ''}</span></li>`).join('')}</ol>
+          <span class="hint">${r.nat ? flag(r.nat) + ' ' : ''}${esc(r.hint)}</span><b>${r.name ? ph(r.photo) + esc(r.name) : ''}</b><span class="v">${r.v ?? ''}</span></li>`).join('')}</ol>
         <p class="center muted small">Lives: ${'❤️'.repeat(v.lives)}${'🤍'.repeat(Math.max(0, 3 - v.lives))}${v.wrong.length ? ` · not on the list: ${v.wrong.map(esc).join(', ')}` : ''}</p>`;
     },
   },

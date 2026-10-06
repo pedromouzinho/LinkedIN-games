@@ -1,7 +1,7 @@
 // Football trivia games, built on data/football.json (Wikidata, CC0). Server-only: answers never leave this module;
 // the browser gets view(puzzle, state). Each game: gen(r) -> puzzle, init() -> state,
 // move(puzzle, state, action, elapsedSecs) -> { state, reply }, view(puzzle, state, elapsedSecs), share(puzzle, state).
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 
 const DATA = JSON.parse(readFileSync(new URL('./data/football.json', import.meta.url)));
 const CLUBS = DATA.clubs, LEAGUES = DATA.leagues, PLAYERS = DATA.players;
@@ -46,7 +46,12 @@ const HOME = { 'GB-ENG': 'England', 'GB-SCT': 'Scotland', 'GB-WLS': 'Wales', 'GB
 export const nationName = code => (code ? HOME[code] || regionNames.of(code.slice(0, 2)) : '?');
 const POS = { GK: 'Goalkeeper', DF: 'Defender', MF: 'Midfielder', FW: 'Forward' };
 
-const pub = p => ({ id: p.id, name: p.name, nat: p.nat });
+// Player photos (Football Manager cut-outs, imported by scripts/faces.mjs) live in a bucket at FACES_URL;
+// data/faces.json lists the players that have one.
+const FACES_FILE = new URL('./data/faces.json', import.meta.url), FACES_URL = process.env.FACES_URL || '';
+const FACES = new Set(existsSync(FACES_FILE) ? JSON.parse(readFileSync(FACES_FILE)) : []);
+const photo = id => (FACES_URL && FACES.has(id) ? `${FACES_URL}/${id}.webp` : null);
+const pub = p => ({ id: p.id, name: p.name, nat: p.nat, photo: photo(p.id) });
 const clubView = id => ({ id, name: CLUBS[id].name, colors: CLUBS[id].colors });
 const fits = (p, cat) => (cat.t === 'club' ? p.clubIds.has(cat.id) : cat.t === 'nat' ? p.nat === cat.id : p.pos.includes(cat.id));
 const catView = cat => (cat.t === 'club' ? { t: 'club', ...clubView(cat.id) } : cat.t === 'nat' ? { t: 'nat', id: cat.id, name: nationName(cat.id) } : { t: 'pos', id: cat.id, name: POS[cat.id] + 's' });
@@ -185,7 +190,7 @@ export const FOOTBALL = {
     },
     view: (p, s) => ({
       cats: p.cats.map(catView), guessesLeft: BANDS.grid.guesses - s.guesses,
-      cells: s.cells.map((id, i) => (id ? { name: BY_ID.get(id).name, ok: true }
+      cells: s.cells.map((id, i) => (id ? { name: BY_ID.get(id).name, ok: true, photo: photo(id) }
         : s.done ? { name: TIER_B.filter(q => fits(q, p.cats[Math.floor(i / 3)]) && fits(q, p.cats[3 + (i % 3)])).slice(0, 3).map(q => q.name).join(', '), ok: false } : null)),
     }),
     share: (p, s) => [0, 3, 6].map(i => s.cells.slice(i, i + 3).map(c => (c ? '🟩' : '⬜')).join('')).join('\n'),
@@ -272,7 +277,7 @@ export const FOOTBALL = {
     },
     view: (p, s, elapsed = 0) => ({
       cats: p.cats.map(catView), cells: s.cells.map(id => (id ? BY_ID.get(id).name : null)), wrong: s.last,
-      current: s.done ? null : { name: BY_ID.get(p.stream[s.at]).name }, left: p.stream.length - s.at,
+      current: s.done ? null : { name: BY_ID.get(p.stream[s.at]).name, photo: photo(p.stream[s.at]) }, left: p.stream.length - s.at,
       remaining: Math.max(0, BANDS.bingo.secs - elapsed),
     }),
     share: (p, s) => `${s.cells.filter(Boolean).length}/12`,
@@ -305,7 +310,7 @@ export const FOOTBALL = {
           const score = id === a.id ? 100 : Math.min(99, Math.round((g.nat === a.nat ? 20 : 0) + (samePos ? 15 : 0) + (Math.min(shared.length, 3) / 3) * 35
             + Math.max(0, 1 - Math.abs(g.born - a.born) / 10) * 15 + (sameLeague ? 15 : 0)));
           return {
-            name: g.name, score, nat: { v: g.nat, ok: g.nat === a.nat }, pos: { v: g.pos.join('/'), ok: samePos },
+            name: g.name, photo: photo(id), score, nat: { v: g.nat, ok: g.nat === a.nat }, pos: { v: g.pos.join('/'), ok: samePos },
             born: { v: g.born, dir: Math.sign(a.born - g.born) }, height: { v: g.h, dir: g.h && a.h ? Math.sign(a.h - g.h) : 0 },
             league: { v: league(g) ? LEAGUES[league(g)] : '–', ok: sameLeague }, shared: shared.map(c => CLUBS[c].name),
           };
@@ -350,7 +355,7 @@ export const FOOTBALL = {
       rows: p.rows.map(({ id, v }, i) => {
         const q = BY_ID.get(id), open = s.found.includes(id) || s.done;
         return { rank: i + 1, hint: p.nat ? `${POS[q.pos[0]] || ''} · ${mainClub(q)}` : nationName(q.nat), nat: p.nat ? null : q.nat,
-          name: open ? q.name : null, v: open ? v : null, found: s.found.includes(id) };
+          name: open ? q.name : null, photo: open ? photo(id) : null, v: open ? v : null, found: s.found.includes(id) };
       }),
       wrong: s.wrong.map(id => BY_ID.get(id).name),
     }),

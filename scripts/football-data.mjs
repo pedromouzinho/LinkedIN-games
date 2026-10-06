@@ -6,7 +6,7 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 
 const MIN_SITELINKS = 30, INFOBOX_TOP = 3000;
-const UA = 'grid-games-data-builder/0.1 (https://github.com/pedromouzinho/LinkedIN-games)';
+const UA = 'GamesAtWork/1.0 (https://gamesatwork.web.app/; football data builder)';
 const POS = { Q201330: 'GK', Q336286: 'DF', Q193592: 'MF', Q280658: 'FW' };
 // UK national teams share P17 = United Kingdom; flags need the home-nation codes.
 const HOME_NATIONS = [[/England/, 'GB-ENG'], [/Scotland/, 'GB-SCT'], [/Wales/, 'GB-WLS'], [/Northern Ireland/, 'GB-NIR']];
@@ -52,7 +52,8 @@ for (const [lo, hi] of [[30, 45], [45, 70], [70, 100000]]) {
     } GROUP BY ?p ?name ?s`);
   for (const r of rows)
     players.set(qid(r.p), {
-      id: qid(r.p), name: FIX_NAMES[qid(r.p)] || r.name, sl: +r.s, born: year(r.born),
+      // The English article title is better watched than the Wikidata label (labels get vandalised: "Sancho Panza").
+      id: qid(r.p), name: FIX_NAMES[qid(r.p)] || r.title?.replace(/ \(.*\)$/, '') || r.name, sl: +r.s, born: year(r.born),
       h: r.height ? Math.round(+r.height * 100) : null,
       pos: (r.pos || '').split(' ').filter(Boolean).map(u => POS[qid(u)]),
       cit: r.cit || null, title: r.title || null, v: 0, stints: [],
@@ -92,7 +93,9 @@ async function pool(items, n, fn) {
   let next = 0;
   await Promise.all(Array.from({ length: n }, async () => { while (next < items.length) await fn(items[next++]); }));
 }
-await pool([...players.values()].filter(p => p.title), 8, async p => {
+let seen = 0;
+await pool([...players.values()].filter(p => p.title), 4, async p => {
+  if (++seen % 500 === 0) log('views', seen);
   const r = await get(`https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/${encodeURIComponent(p.title.replaceAll(' ', '_'))}/monthly/${day(from)}/${day(to)}`);
   p.v = r.ok ? (await r.json()).items.reduce((s, x) => s + x.views, 0) : 0;
 });
