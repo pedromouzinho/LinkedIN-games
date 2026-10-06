@@ -28,6 +28,12 @@ Wikimedia rate-limits shared IPs, so refresh it on Google Cloud and commit the r
 `gcloud builds submit --config scripts/cloudbuild-data.yaml . && gsutil cp gs://<project>-data/football.json data/`.
 No club crests are used (trademarks); shirts are drawn from the clubs' colours.
 
+### Player photos (optional)
+`scripts/faces.mjs` matches players to a Football Manager cut-out facepack (files `face_<FM unique id>.png`), using
+an FM save exported with [fmsave](https://github.com/rhiever/fmsave), and writes 128 px WebP files named
+`<wikidata id>.webp` plus `data/faces.json`. The site shows them when `FACES_URL` points at a folder holding those
+files. Facepack photos belong to their photographers and clubs: publishing them is the operator's call.
+
 ## Run locally
 ```bash
 npm install

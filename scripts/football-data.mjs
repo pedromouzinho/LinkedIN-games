@@ -120,7 +120,7 @@ function infobox(text) {
   add(cur);
   return out;
 }
-const plain = v => (v || '').replace(/\{\{[^{}]*\}\}/g, '');
+const plain = v => (v || '').replace(/\{\{[^{}]*\}\}/g, '').replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1'); // [[List of … 100 or more caps|234]] -> 234
 const num = v => { const m = /\d+/.exec(plain(v)); return m ? +m[0] : null; };
 const link = v => /\[\[([^\]|#]+)/.exec(v || '')?.[1].trim() || null;
 function rows(box, prefix) { // years/clubs/caps/goals or nationalyears/nationalteam/nationalcaps/nationalgoals
