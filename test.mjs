@@ -44,6 +44,16 @@ for (let day = 1; day <= days; day++) {
   between(z.walls.length, B.zip.walls, 'zip walls');
   assert(!G.zipCheck(z, [...z.solution].reverse()).win);
   assert(!G.zipCheck(z, z.solution.map(String)).win, 'zip rejects junk');
+
+  const pa = time('patches', () => G.patchesGen(r));
+  assert(G.patchesCheck(pa, pa.solution).win, 'patches solution valid');
+  const pl = G.patchesLogic(pa);
+  assert(pl.solved && JSON.stringify(pl.rects) === JSON.stringify(pa.solution), 'patches logic finds the solution');
+  between(pl.hard, B.patches.hardSteps ?? B.patches.hard, 'patches hard steps');
+  between(pa.clues.length, B.patches.pieces, 'patches pieces');
+  assert(!G.patchesCheck(pa, pa.solution.slice(1)).win, 'patches rejects uncovered cells');
+  assert(!G.patchesCheck(pa, [...pa.solution, pa.solution[0]]).win, 'patches rejects overlap');
+  assert(!G.patchesCheck(pa, 'junk').win && !G.patchesCheck(pa, [[0, 0, 99, 1]]).win, 'patches rejects junk');
 }
 for (const [g, ms] of Object.entries(slow)) assert(ms < 3000, `${g} took ${ms.toFixed(0)}ms`);
 console.log(`ok: ${days} days, slowest ms`, Object.fromEntries(Object.entries(slow).map(([g, v]) => [g, Math.round(v)])));

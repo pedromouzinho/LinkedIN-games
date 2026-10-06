@@ -59,6 +59,7 @@ const checkers = {
   tango: (p, a) => G.tangoCheck(p, grid(p, a)),
   sudoku: (p, a) => G.sudokuCheck(grid(p, a)),
   zip: (p, a) => G.zipCheck(p, list(a)),
+  patches: (p, a) => G.patchesCheck(p, a),
 };
 
 // Hint: first mistake if any, otherwise one correct move.
@@ -68,6 +69,12 @@ function hint(game, p, a) {
   if (game === 'zip') {
     const ok = a.findIndex((x, i) => x !== sol[i]);
     return ok >= 0 ? { truncate: ok } : { cell: sol[a.length] };
+  }
+  if (game === 'patches') {
+    const key = r => JSON.stringify(r), sol = new Set(p.solution.map(key)), placed = new Set(a.map(key));
+    const wrong = a.find(r => !sol.has(key(r)));
+    if (wrong) return { wrong: Array.isArray(wrong) && Number.isInteger(wrong[0]) && Number.isInteger(wrong[1]) ? wrong[0] * p.n + wrong[1] : 0 };
+    return { rect: p.solution.find(r => !placed.has(key(r))) };
   }
   if (game === 'queens') {
     const wrong = a.find(x => !sol.includes(x));

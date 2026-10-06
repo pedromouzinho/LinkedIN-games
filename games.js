@@ -8,6 +8,7 @@ export const BANDS = {
   tango: { hardest: [2, 3], clues: [8, 12] }, // hardest = most line options left when a forced cell was found
   sudoku: { givens: [10, 12] },
   zip: { n: 6, numbers: [6, 9], walls: [3, 5] }, // walls are added until the path is unique
+  patches: { n: 6, pieces: [8, 12], hard: [6, 11] }, // hard = uses of the "only one clue reaches this cell" deduction
 };
 
 export const rng = seed => () => {
@@ -395,4 +396,109 @@ export function zipCheck(p, path) {
 }
 export { zipMoves };
 
-export const GENERATORS = { queens: queensGen, tango: tangoGen, sudoku: sudokuGen, zip: zipGen };
+// ---------- Patches: split the grid into rectangles, each covering exactly one clue ----------
+// A clue gives the patch's shape (square / wide / tall / any) and optionally its area.
+const FITS = { square: (h, w) => h === w, wide: (h, w) => w > h, tall: (h, w) => h > w, any: () => true };
+const rectCells = ([top, left, h, w], n) => range(h * w).map(k => (top + Math.floor(k / w)) * n + left + (k % w));
+
+function patchCandidates({ n, clues }) {
+  const at = new Map(clues.map((c, k) => [c.cell, k]));
+  return clues.map(({ cell, shape, size }, k) => {
+    const r0 = Math.floor(cell / n), c0 = cell % n, out = [];
+    for (let top = 0; top <= r0; top++)
+      for (let left = 0; left <= c0; left++)
+        for (let h = r0 - top + 1; top + h <= n; h++)
+          for (let w = c0 - left + 1; left + w <= n; w++) {
+            if ((size && h * w !== size) || !FITS[shape](h, w)) continue;
+            const cells = rectCells([top, left, h, w], n);
+            if (cells.every(i => !at.has(i) || at.get(i) === k)) out.push({ rect: [top, left, h, w], cells });
+          }
+    return out;
+  });
+}
+
+// Deductions: a cell inside every option of a clue belongs to it; a cell only one clue can reach belongs to it.
+// hard = how often the second (harder) rule was needed.
+export function patchesLogic(p) {
+  const N = p.n * p.n, owner = Array(N).fill(-1);
+  let cand = patchCandidates(p), hard = 0;
+  for (;;) {
+    cand = cand.map((cs, k) => cs.filter(c => c.cells.every(i => owner[i] < 0 || owner[i] === k)));
+    if (cand.some(cs => !cs.length)) return { solved: false, hard };
+    let changed = false;
+    cand.forEach((cs, k) => {
+      for (const i of cs[0].cells) if (owner[i] !== k && cs.every(c => c.cells.includes(i))) { owner[i] = k; changed = true; }
+    });
+    if (changed) continue;
+    const reach = Array.from({ length: N }, () => new Set());
+    cand.forEach((cs, k) => cs.forEach(c => c.cells.forEach(i => reach[i].add(k))));
+    if (reach.some(s => !s.size)) return { solved: false, hard };
+    const i = reach.findIndex((s, i) => owner[i] < 0 && s.size === 1);
+    if (i < 0) break;
+    const [k] = reach[i];
+    owner[i] = k;
+    cand[k] = cand[k].filter(c => c.cells.includes(i));
+    hard++;
+  }
+  const solved = cand.every(cs => cs.length === 1) && owner.every(o => o >= 0);
+  return { solved, hard, rects: solved ? cand.map(cs => cs[0].rect) : null };
+}
+
+export function patchesGen(r, { n, pieces, hard } = BANDS.patches) {
+  for (;;) {
+    const owner = Array(n * n).fill(-1), rects = [];
+    for (let i = 0; i < n * n; i++) {
+      if (owner[i] >= 0) continue;
+      const top = Math.floor(i / n), left = i % n, opts = [];
+      for (let h = 1; top + h <= n && h <= 5; h++)
+        for (let w = 1; left + w <= n && w <= 5; w++)
+          if (h * w >= 2 && h * w <= 9 && rectCells([top, left, h, w], n).every(x => owner[x] < 0)) opts.push([top, left, h, w]);
+      const rect = opts.length ? opts[Math.floor(r() * opts.length)] : [top, left, 1, 1];
+      rectCells(rect, n).forEach(x => (owner[x] = rects.length));
+      rects.push(rect);
+    }
+    if (!inBand(rects.length, pieces)) continue;
+    const clues = rects.map(([top, left, h, w]) => {
+      const cell = (top + Math.floor(r() * h)) * n + left + Math.floor(r() * w);
+      return { cell, shape: h === w ? 'square' : w > h ? 'wide' : 'tall', size: h * w };
+    });
+    const p = { n, clues };
+    if (!patchesLogic(p).solved) continue;
+    // hide areas first, then turn at most a quarter of the shapes into "any", so shapes stay the main clue
+    const hide = (k, field, blank) => {
+      const keep = clues[k][field];
+      clues[k][field] = blank;
+      if (patchesLogic(p).solved) return true;
+      clues[k][field] = keep;
+      return false;
+    };
+    for (const k of shuffle(range(clues.length), r)) hide(k, 'size', null);
+    let anys = 0;
+    for (const k of shuffle(range(clues.length), r)) if (anys < clues.length / 4 && hide(k, 'shape', 'any')) anys++;
+    const res = patchesLogic(p);
+    if (inBand(res.hard, hard)) return { ...p, solution: rects, score: res.hard };
+  }
+}
+
+// Violations for the UI and the checker. rects: [top, left, h, w] each.
+export function patchesRules({ n, clues }, rects) {
+  const out = [];
+  for (const rect of rects) {
+    const cells = rectCells(rect, n), inside = clues.filter(c => cells.includes(c.cell));
+    if (inside.length !== 1) out.push({ rule: 'clues', area: cells, bad: cells });
+    else if (!FITS[inside[0].shape](rect[2], rect[3])) out.push({ rule: 'shape', area: cells, bad: cells });
+    else if (inside[0].size && inside[0].size !== rect[2] * rect[3]) out.push({ rule: 'size', area: cells, bad: cells });
+  }
+  return out;
+}
+
+export function patchesCheck(p, rects) {
+  const { n } = p, seen = new Set();
+  const okRect = x => Array.isArray(x) && x.length === 4 && x.every(Number.isInteger) && x[0] >= 0 && x[1] >= 0 && x[2] > 0 && x[3] > 0 && x[0] + x[2] <= n && x[1] + x[3] <= n;
+  if (!Array.isArray(rects) || !rects.every(okRect)) return { win: false };
+  for (const rect of rects) for (const i of rectCells(rect, n)) { if (seen.has(i)) return { win: false }; seen.add(i); }
+  return { win: seen.size === n * n && !patchesRules(p, rects).length };
+}
+export { rectCells };
+
+export const GENERATORS = { queens: queensGen, tango: tangoGen, sudoku: sudokuGen, zip: zipGen, patches: patchesGen };

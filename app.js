@@ -39,6 +39,9 @@ const GAMES = {
     rules: 'Fill with suns and moons. Each row and column has 3 of each, never 3 in a row. = means same, × means opposite.',
     msgs: { three: 'No more than 2 ☀ or ☾ can be next to each other.', count: 'Each row and column has exactly 3 ☀ and 3 ☾.', sign: 'Cells joined by = must match, cells joined by × must differ.' } },
   zip: { title: 'Zip', icon: '🔗', theme: '#d9541e', rules: 'Drag one path through the numbers in order. Fill every cell. Thick lines are walls.' },
+  patches: { title: 'Patches', icon: '🧩', theme: '#c2417a',
+    rules: 'Split the grid into rectangles. Each one covers exactly one clue and takes its shape (square, wide, tall or any); a number is its area. Drag to draw, tap a patch to remove it.',
+    msgs: { clues: 'Each patch must cover exactly one clue.', shape: 'A patch must have the shape shown on its clue.', size: 'A patch’s area must match its number.' } },
   sudoku: { title: 'Mini Sudoku', icon: '🔢', theme: '#2f8f5b',
     rules: 'Fill 1–6 so every row, column and 2×3 box has each number once. Turn on ✏️ Notes to pencil in candidates.',
     msgs: { row: 'Each row can only have one of each number.', col: 'Each column can only have one of each number.', box: 'Each 2×3 box can only have one of each number.' } },
@@ -434,5 +437,56 @@ const BOARDS = {
     };
   },
 };
+
+// Patches: rectangles live in an overlay layer above the cells; colour comes from the clue they cover.
+const PCOLORS = ['#e2423b', '#2aa198', '#d4a017', '#8a5cf6', '#e86fa8', '#3d7fe0', '#f08a24', '#5bb85b', '#8d6e63', '#16a3c4', '#c0457a', '#7c8b2e'];
+Object.assign(BOARDS, {
+  patches(el, p, ctx) {
+    const { n, clues } = p, clueAt = new Map(clues.map((c, k) => [c.cell, k]));
+    const badge = (c, k) => `<span class="clue" style="--pc:${PCOLORS[k % PCOLORS.length]}"><i class="shape ${c.shape}"></i>${c.size ?? ''}</span>`;
+    let rects = [];
+    el.innerHTML = gridHtml(n, 'patches', i => `<div class="c">${clueAt.has(i) ? badge(clues[clueAt.get(i)], clueAt.get(i)) : ''}</div>`);
+    const grid = el.firstChild;
+    grid.insertAdjacentHTML('beforeend', '<div class="layer"></div><div class="patch ghost" hidden></div>');
+    const layer = grid.querySelector('.layer'), ghost = grid.querySelector('.ghost');
+    const box = (a, b) => { const [r1, c1, r2, c2] = [Math.floor(a / n), a % n, Math.floor(b / n), b % n];
+      return [Math.min(r1, r2), Math.min(c1, c2), Math.abs(r1 - r2) + 1, Math.abs(c1 - c2) + 1]; };
+    const place = (el, [t, l, h, w]) => Object.assign(el.style, { top: `${(t / n) * 100}%`, left: `${(l / n) * 100}%`, height: `${(h / n) * 100}%`, width: `${(w / n) * 100}%` });
+    const overlaps = (a, b) => a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3];
+    const add = rect => { rects = rects.filter(r => !overlaps(r, rect)); rects.push(rect); };
+    let start = -1;
+    grid.onpointerdown = e => { start = cellAt(grid, e, n); if (start < 0) return; grid.setPointerCapture(e.pointerId); ghost.hidden = false; place(ghost, box(start, start)); };
+    grid.onpointermove = e => { if (start < 0) return; const i = cellAt(grid, e, n); if (i >= 0) place(ghost, box(start, i)); };
+    grid.onpointerup = e => {
+      if (start < 0) return;
+      const end = cellAt(grid, e, n), rect = box(start, end < 0 ? start : end), at = rects.findIndex(r => overlaps(r, rect));
+      ghost.hidden = true;
+      ctx.before();
+      if (end === start && at >= 0) rects.splice(at, 1); // tap on a patch removes it
+      else add(rect);
+      start = -1;
+      ctx.after();
+    };
+    grid.onpointercancel = () => { start = -1; ghost.hidden = true; };
+    let shown = '';
+    return {
+      draw() {
+        const rules = G.patchesRules(p, rects), bad = new Set(rules.map(v => v.area[0]));
+        const key = JSON.stringify(rects) + [...bad];
+        if (key !== shown) {
+          shown = key;
+          layer.innerHTML = rects.map(r => {
+            const cells = G.rectCells(r, n), k = clues.findIndex(c => cells.includes(c.cell));
+            return `<div class="patch${bad.has(cells[0]) ? ' bad' : ''}" style="--pc:${k >= 0 ? PCOLORS[k % PCOLORS.length] : '#9e9e9e'};--d:${(r[0] + r[1]) * 45}ms"></div>`;
+          }).join('');
+          [...layer.children].forEach((d, k) => place(d, rects[k]));
+        }
+        return { win: G.patchesCheck(p, rects).win, rules };
+      },
+      get: () => rects, set: s => (rects = s.map(r => [...r])), reset: () => (rects = []), answer: () => rects,
+      hint(h) { if (h.wrong != null) return ctx.flash(h.wrong); if (h.rect) { ctx.before(); add(h.rect); ctx.after(); ctx.flash(h.rect[0] * n + h.rect[1]); } },
+    };
+  },
+});
 
 boot().catch(e => { $('#center').innerHTML = `<div class="card">Couldn’t load: ${esc(e.message)}</div>`; });
