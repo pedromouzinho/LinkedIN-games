@@ -14,7 +14,8 @@ const SECRET = process.env.SECRET || (DEV_LOGIN ? 'dev-secret' : null);
 if (!SECRET) throw new Error('Set SECRET (a long random string) — it signs sessions and seeds puzzles');
 
 const TZ = 'Europe/Lisbon', LAUNCH = '2026-10-01';
-const db = new Firestore({ projectId: process.env.GOOGLE_CLOUD_PROJECT || 'demo-grid-games',
+// On Cloud Run the project comes from the metadata server; the demo id is only for the local emulator.
+const db = new Firestore({ projectId: process.env.GOOGLE_CLOUD_PROJECT || (process.env.FIRESTORE_EMULATOR_HOST ? 'demo-grid-games' : undefined),
   databaseId: process.env.FIRESTORE_DATABASE || '(default)', ignoreUndefinedProperties: true });
 const google = new OAuth2Client();
 const GAMES = [...Object.keys(G.GENERATORS), ...Object.keys(F)];
