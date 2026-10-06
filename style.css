@@ -183,6 +183,7 @@ dialog h3 { margin: 0 0 6px; }
 .search ul:empty { display: none; }
 .search li { padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; gap: 8px; align-items: center; }
 .search li.on, .search li:hover { background: var(--given); }
+.search li .born { margin-left: auto; }
 .tries { text-align: center; color: var(--muted); font-size: 13px; }
 .tries s { margin: 0 4px; }
 .reveal { font-size: 18px; }

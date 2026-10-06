@@ -356,6 +356,6 @@ export const FOOTBALL = {
 };
 
 // Search list for the browser: every player, most famous first.
-export const PLAYER_INDEX = PLAYERS.map(p => [p.id, p.name, p.nat || '']);
+export const PLAYER_INDEX = PLAYERS.map(p => [p.id, p.name, p.nat || '', p.born || '']); // birth year tells namesakes apart
 export const answerName = (game, p) => (p.answer ? BY_ID.get(p.answer).name : null);
 export { PLAYERS, fits, matching }; // for tests
