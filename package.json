@@ -1,0 +1,13 @@
+{
+  "name": "grid-games",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "@google-cloud/firestore": "^9.3.1",
+    "google-auth-library": "^11.1.0"
+  }
+}

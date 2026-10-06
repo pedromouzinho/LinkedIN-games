@@ -1,26 +1,49 @@
+// Guards the difficulty standard: run `node test.mjs [days]`.
 import assert from 'node:assert';
-import { rng, queensGen, queensCheck, tangoGen, tangoCheck, sudokuGen, sudokuCheck, zipGen, zipCheck } from './games.js';
+import * as G from './games.js';
 
-for (let seed = 1; seed <= 20; seed++) {
-  const r = rng(seed);
-  const q = queensGen(r);
-  assert(queensCheck(q, new Set(q.solution)).win, 'queens solution valid');
-  assert(!queensCheck(q, new Set(q.solution.slice(1))).win, 'queens incomplete rejected');
+const days = +process.argv[2] || 60, B = G.BANDS, slow = {};
+const between = (v, [lo, hi], what) => assert(v >= lo && v <= hi, `${what}=${v} outside [${lo},${hi}]`);
+const time = (g, f) => { const t = performance.now(), v = f(); slow[g] = Math.max(slow[g] || 0, performance.now() - t); return v; };
 
-  const t = tangoGen(r);
-  assert(tangoCheck(t, t.solution).win, 'tango solution valid');
-  assert(t.given.every((v, i) => v == null || v === t.solution[i]), 'tango givens match');
+for (let day = 1; day <= days; day++) {
+  const r = G.rng(day * 2654435761);
+
+  const q = time('queens', () => G.queensGen(r));
+  assert(G.queensCheck(q, q.solution).win);
+  const ql = G.queensLogic(q);
+  assert(ql.solved && ql.queens.sort().join() === [...q.solution].sort().join(), 'queens logic finds the solution');
+  between(ql.hard, B.queens.hardSteps, 'queens hard steps');
+  assert(!G.queensCheck(q, q.solution.slice(1)).win);
+  assert(!G.queensCheck(q, [...q.solution.slice(1), '0']).win, 'queens rejects junk');
+
+  const t = time('tango', () => G.tangoGen(r));
+  assert(G.tangoCheck(t, t.solution).win);
+  const tl = G.tangoLogic(t.given, t.edges);
+  assert(tl.solved && tl.g.join() === t.solution.join(), 'tango logic finds the solution');
+  between(tl.hardest, B.tango.hardest, 'tango hardest');
+  between(t.given.filter(v => v != null).length + t.edges.length, B.tango.clues, 'tango clues');
   const tb = [...t.solution]; tb[0] ^= 1;
-  assert(!tangoCheck(t, tb).win, 'tango flipped cell rejected');
+  assert(!G.tangoCheck(t, tb).win);
+  assert(!G.tangoCheck(t, t.solution.map(String)).win, 'tango rejects junk');
+  assert(!G.tangoCheck(t, t.solution.slice(1)).win, 'tango rejects short grid');
 
-  const s = sudokuGen(r);
-  assert(sudokuCheck(s.solution).win, 'sudoku solution valid');
-  assert(s.given.some(v => v == null), 'sudoku has blanks');
+  const s = time('sudoku', () => G.sudokuGen(r));
+  assert(G.sudokuCheck(s.solution).win);
+  const sl = G.sudokuLogic(s.given);
+  assert(sl.solved && sl.g.join() === s.solution.join(), 'sudoku logic finds the solution');
+  between(s.given.filter(v => v != null).length, B.sudoku.givens, 'sudoku givens');
   const sb = [...s.solution]; [sb[0], sb[1]] = [sb[1], sb[0]];
-  assert(!sudokuCheck(sb).win, 'sudoku swap rejected');
+  assert(!G.sudokuCheck(sb).win);
+  assert(!G.sudokuCheck(s.solution.map(v => v + 0.5)).win, 'sudoku rejects junk');
 
-  const z = zipGen(r);
-  assert(zipCheck(z, z.solution).win, 'zip solution valid');
-  assert(!zipCheck(z, [...z.solution].reverse()).win, 'zip reversed rejected');
+  const z = time('zip', () => G.zipGen(r));
+  assert(G.zipCheck(z, z.solution).win);
+  assert.equal(G.zipCount(z), 1, 'zip has one solution');
+  between(Object.keys(z.nums).length, B.zip.numbers, 'zip numbers');
+  between(z.walls.length, B.zip.walls, 'zip walls');
+  assert(!G.zipCheck(z, [...z.solution].reverse()).win);
+  assert(!G.zipCheck(z, z.solution.map(String)).win, 'zip rejects junk');
 }
-console.log('ok');
+for (const [g, ms] of Object.entries(slow)) assert(ms < 3000, `${g} took ${ms.toFixed(0)}ms`);
+console.log(`ok: ${days} days, slowest ms`, Object.fromEntries(Object.entries(slow).map(([g, v]) => [g, Math.round(v)])));

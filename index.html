@@ -10,42 +10,17 @@
 <body>
   <header class="nav">
     <div class="wrap">
-      <a class="logo" href="#">GG</a>
+      <a class="logo" href="/">GG</a>
       <strong>Grid Games</strong>
       <span class="muted" id="today"></span>
     </div>
   </header>
-
   <main class="wrap layout">
-    <aside class="card profile">
-      <div class="banner"></div>
-      <div class="avatar" id="avatar"></div>
-      <label class="sr" for="name">Your name</label>
-      <input id="name" placeholder="Your name" maxlength="30">
-      <p class="muted">🔥 <b id="streak">0</b>-day streak</p>
-    </aside>
-
-    <section id="center"></section>
-
-    <aside class="card">
-      <h3>Your network today</h3>
-      <div id="board"></div>
-      <h4>Add a connection's result</h4>
-      <textarea id="paste" rows="3" placeholder="Paste the text a friend shared"></textarea>
-      <button id="add" class="btn ghost">Add</button>
-      <p class="muted small" id="addMsg"></p>
-    </aside>
+    <aside id="left"></aside>
+    <section id="center"><div class="card muted">Loading…</div></section>
+    <aside id="right"></aside>
   </main>
-
-  <dialog id="done">
-    <h2 id="doneTitle"></h2>
-    <pre id="shareText"></pre>
-    <div class="row">
-      <button id="share" class="btn">Share</button>
-      <button id="close" class="btn ghost">Close</button>
-    </div>
-  </dialog>
-
+  <div id="toast" role="status"></div>
   <script type="module" src="app.js"></script>
 </body>
 </html>

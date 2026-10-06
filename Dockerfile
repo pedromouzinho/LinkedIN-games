@@ -1,2 +1,7 @@
-FROM mirror.gcr.io/library/nginx:alpine
-COPY index.html app.js games.js style.css /usr/share/nginx/html/
+FROM mirror.gcr.io/library/node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY server.js games.js app.js index.html style.css ./
+USER node
+CMD ["node", "server.js"]
