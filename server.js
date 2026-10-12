@@ -116,7 +116,8 @@ function bump(s = {}, day, won, secs) {
 function record(tx, uid, user, day, game, result) {
   const g = bump(user.stats?.[game], day, result.won, result.secs), { cur, max, last } = bump(user.streak, day, result.won, result.secs);
   const results = user.today?.day === day ? user.today.results : {};
-  tx.update(userDoc(uid), { [`stats.${game}`]: g, streak: { cur, max, last }, today: { day, results: { ...results, [game]: result } } });
+  tx.update(userDoc(uid), { [`stats.${game}`]: g, streak: { cur, max, last }, today: { day, results: { ...results, [game]: result } },
+    ...(user.guest && { expireAt: guestExpiry() }) }); // a guest who keeps playing keeps their record
 }
 
 // Today's times of everyone who finished a game, for "faster than X%". Cached a minute per instance.
@@ -166,6 +167,26 @@ async function login(res, secure, uid, profile) {
   return { ok: true };
 }
 
+// Guests play before signing in. Their ids start with GUEST; a Firestore TTL policy on expireAt removes abandoned ones.
+const GUEST = 'a';
+const guestExpiry = () => new Date(Date.now() + 90 * 864e5);
+// Signing in from a guest session: a new account takes over the guest's games and streak; an existing account keeps
+// its own history and the guest's games are dropped (otherwise today's puzzle could be solved twice).
+async function adopt(guest, uid) {
+  const [g, u] = await db.getAll(userDoc(guest), userDoc(uid));
+  if (!g.data()?.guest) return;
+  const fresh = !u.exists, w = db.bulkWriter();
+  const owned = await Promise.all(['plays', 'practice'].map(c => db.collection(c).where('uid', '==', guest).get()));
+  for (const d of owned.flatMap(s => s.docs)) {
+    if (fresh) w.set(db.doc(`${d.ref.parent.id}/${d.id.replace(guest, uid)}`), { ...d.data(), uid });
+    w.delete(d.ref);
+  }
+  if (fresh) { const { stats, streak, today: t } = g.data(); w.set(userDoc(uid), { stats, streak, today: t }, { merge: true }); }
+  w.delete(userDoc(guest));
+  await w.close();
+  fieldCache.clear(); // its cached times still list the guest id, which would count as another player
+}
+
 // ---------- football: the server keeps each play's state; the browser only sends actions ----------
 const stateRef = (day, game, uid) => (day === today() ? playRef(day, game, uid) : db.doc(`practice/${day}_${game}_${uid}`));
 const elapsedOf = d => Math.floor(((d.solvedAt || Date.now()) - d.started) / 1000);
@@ -193,16 +214,24 @@ async function footballStep(uid, game, day, action) {
 const routes = {
   'GET /api/config': async () => ({ clientId: GOOGLE_CLIENT_ID, devLogin: !!DEV_LOGIN, day: today(), num: dayNum(today()), launch: LAUNCH }),
 
-  'POST /api/login': async ({ body, res, secure }) => {
+  'POST /api/login': async ({ uid, body, res, secure }) => {
     const t = await google.verifyIdToken({ idToken: String(body.credential), audience: GOOGLE_CLIENT_ID });
-    const p = t.getPayload();
-    return login(res, secure, `g${p.sub}`, { name: p.name || p.email, picture: p.picture || '' });
+    const p = t.getPayload(), id = `g${p.sub}`;
+    if (uid?.startsWith(GUEST)) await adopt(uid, id);
+    return login(res, secure, id, { name: p.name || p.email, picture: p.picture || '' });
   },
-  'POST /api/dev-login': async ({ body, res, secure }) => {
+  'POST /api/dev-login': async ({ uid, body, res, secure }) => {
     if (!DEV_LOGIN) throw Object.assign(new Error('not found'), { status: 404 });
     const name = String(body.name || '').trim().slice(0, 30);
     if (!name) throw Object.assign(new Error('name required'), { status: 400 });
-    return login(res, secure, `dev${hmac(name).toString('hex').slice(0, 12)}`, { name, picture: '' });
+    const id = `dev${hmac(name).toString('hex').slice(0, 12)}`;
+    if (uid?.startsWith(GUEST)) await adopt(uid, id);
+    return login(res, secure, id, { name, picture: '' });
+  },
+  // Created when someone presses Start without an account, so visitors who only look around leave nothing behind.
+  'POST /api/guest': async ({ uid, res, secure }) => {
+    if (uid) return { ok: true };
+    return login(res, secure, GUEST + crypto.randomBytes(9).toString('hex'), { name: 'Guest', picture: '', guest: true, expireAt: guestExpiry() });
   },
   'POST /api/logout': async ({ res }) => { res.setHeader('Set-Cookie', `${COOKIE}=; Path=/; Max-Age=0`); return { ok: true }; },
 
@@ -211,7 +240,7 @@ const routes = {
     if (!u) throw Object.assign(new Error('sign in'), { status: 401 }); // account deleted on another device
     const res = u.today?.day === today() ? u.today.results : {};
     const played = Object.fromEntries(GAMES.map(g => [g, res[g] ? { secs: res[g].secs, won: res[g].won !== false, score: res[g].score ?? null } : null]));
-    return { ...brief(uid, u), streak: live(u.streak), played, connections: u.connections || [] };
+    return { ...brief(uid, u), guest: !!u.guest, streak: live(u.streak), played, connections: u.connections || [] };
   },
   // GDPR erasure: the account, every play, and the links other people had to it.
   'POST /api/delete-account': async ({ uid, res }) => {
@@ -233,6 +262,7 @@ const routes = {
   },
   'POST /api/connect': async ({ uid, body }) => {
     const other = String(body.uid || '');
+    if (uid.startsWith(GUEST) || other.startsWith(GUEST)) throw Object.assign(new Error('sign in to connect'), { status: 400 });
     if (other === uid || !/^[\w-]{1,64}$/.test(other) || !(await userDoc(other).get()).exists) throw Object.assign(new Error('cannot connect'), { status: 400 });
     await db.batch()
       .update(userDoc(uid), { connections: FieldValue.arrayUnion(other) })
@@ -288,7 +318,8 @@ const routes = {
     return hint(game, p, body.state);
   },
 };
-const PUBLIC = new Set(['GET /api/config', 'POST /api/login', 'POST /api/dev-login', 'POST /api/logout']);
+const PUBLIC = new Set(['GET /api/config', 'POST /api/login', 'POST /api/dev-login', 'POST /api/logout', 'POST /api/guest',
+  'GET /api/user']); // name + picture only, the same the invite page's share preview already shows
 
 async function readBody(req) {
   let size = 0;

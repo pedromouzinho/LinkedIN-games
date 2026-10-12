@@ -1,7 +1,7 @@
 # Games@Work
 
-Two-minute daily puzzles for the office, in a social-feed layout. Sign in with Google, connect with colleagues
-through invite links, compare results on a shared leaderboard.
+Two-minute daily puzzles for the office. Play straight away as a guest; sign in with Google to keep your streak,
+connect with colleagues through invite links and compare results on a shared leaderboard.
 
 - **Logic:** Kings, Solo, Unzip, Holes, Maxi Sudoku.
 - **Football:** Who Am I, Clues, Grid, Links, Bingo, Hot or Cold, Top 10.
@@ -58,6 +58,8 @@ gcloud run deploy games-at-work --source . --region $R --allow-unauthenticated -
   --set-env-vars "GOOGLE_CLIENT_ID=<id>.apps.googleusercontent.com,SECRET=$(openssl rand -hex 32),CONTACT_EMAIL=<you@example.com>,OPERATOR_NAME=<your name>"
 ```
 3. Later deploys keep those env vars: `gcloud run deploy games-at-work --source . --region $R`.
+4. Guests who stop playing are deleted after 90 days by a TTL policy (once per project):
+   `gcloud firestore fields ttls update expireAt --collection-group=users --enable-ttl`.
    Never change `SECRET` afterwards: it signs sessions and seeds puzzles.
 4. Your domain:
 ```bash

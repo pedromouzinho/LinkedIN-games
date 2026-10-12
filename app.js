@@ -69,45 +69,53 @@ Object.assign(GAMES, {
     rules: 'Name the ten players on today’s list. Each row has a hint. Three wrong names and the round ends.' },
 });
 
-let cfg, me;
-const inviteLink = () => `${location.origin}/?invite=${me.uid}`;
+let cfg, me; // me: null before the first Start, { guest: true } until Google sign-in
+const member = () => me && !me.guest;
+const inviteLink = () => (member() ? `${location.origin}/?invite=${me.uid}` : `${location.origin}/`);
+const focus = on => document.body.classList.toggle('focus', on); // game screens hide the side panels
 
 // ---------- shell ----------
 async function boot() {
   cfg = await api('/api/config');
   $('#today').textContent = new Date(cfg.day + 'T12:00').toLocaleDateString(LOCALE, { weekday: 'long', month: 'long', day: 'numeric' });
   me = await api('/api/me').catch(e => { if (e.status === 401) return null; throw e; });
-  if (!me) return signIn();
   left();
   right();
   const invite = new URLSearchParams(location.search).get('invite');
-  if (invite && invite !== me.uid && !me.connections.includes(invite)) return inviteCard(invite);
+  if (invite && invite !== me?.uid && !me?.connections.includes(invite)) return inviteCard(invite);
   home();
 }
 
-function signIn() {
-  $('#left').innerHTML = $('#right').innerHTML = '';
-  $('#center').innerHTML = `<div class="card hero">
-    <h2>Two-minute puzzles at work</h2>
-    <p class="muted">Logic and football puzzles, new every day. Keep your streak and see how your colleagues did.</p>
-    <div id="gbtn"></div>
-    <p class="muted small">By continuing you agree to the <a href="/terms">Terms</a> and the <a href="/privacy">Privacy</a> page.</p>
-    ${cfg.devLogin ? `<form id="dev" class="row"><input name="name" placeholder="Name (dev login)" required maxlength="30"><button class="btn">Sign in</button></form>` : ''}
-    ${!cfg.clientId && !cfg.devLogin ? '<p class="bad-text">Sign-in is not configured (GOOGLE_CLIENT_ID).</p>' : ''}
-  </div>`;
-  if (cfg.devLogin) $('#dev').onsubmit = async e => { e.preventDefault(); await api('/api/dev-login', { name: e.target.name.value }); boot(); };
-  if (cfg.clientId) {
+// Sign-in block: Google's button (plus the name-only dev login when enabled). Signing in keeps a guest's games.
+let gis;
+function signInBox(el) {
+  el.innerHTML = `<div class="gbtn"></div>
+    ${cfg.devLogin ? `<form class="dev row"><input name="name" placeholder="Name (dev login)" required maxlength="30"><button class="btn small">Sign in</button></form>` : ''}
+    ${!cfg.clientId && !cfg.devLogin ? '<p class="bad-text small">Sign-in is not configured (GOOGLE_CLIENT_ID).</p>' : ''}
+    <p class="muted small">By signing in you agree to the <a href="/terms">Terms</a> and the <a href="/privacy">Privacy</a> page.</p>`;
+  el.querySelector('.dev')?.addEventListener('submit', async e => { e.preventDefault(); await api('/api/dev-login', { name: e.target.name.value }); boot(); });
+  if (!cfg.clientId) return;
+  gis ??= new Promise(ok => {
     const s = document.createElement('script');
     s.src = 'https://accounts.google.com/gsi/client';
-    s.onload = () => {
-      google.accounts.id.initialize({ client_id: cfg.clientId, callback: async r => { await api('/api/login', { credential: r.credential }); boot(); } });
-      google.accounts.id.renderButton($('#gbtn'), { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with' });
-    };
+    s.onload = () => { google.accounts.id.initialize({ client_id: cfg.clientId, callback: async r => { await api('/api/login', { credential: r.credential }); boot(); } }); ok(); };
     document.head.append(s);
-  }
+  });
+  gis.then(() => google.accounts.id.renderButton(el.querySelector('.gbtn'), { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with' }));
 }
 
 function left() {
+  if (!member()) {
+    $('#left').innerHTML = `<div class="card profile guest">
+      <b>${me ? `🔥 ${me.streak}-day streak` : 'Play now, no account needed'}</b>
+      <p class="muted small">Sign in to keep your streak on every device and compare times with your colleagues.</p>
+      <div id="signin"></div>
+      ${me ? '<button class="link small muted" id="delete">Forget my games on this device</button>' : ''}
+    </div>`;
+    signInBox($('#signin'));
+    $('#delete')?.addEventListener('click', forget);
+    return;
+  }
   $('#left').innerHTML = `<div class="card profile">
     <div class="banner"></div>${avatar(me)}
     <b>${esc(me.name)}</b>
@@ -118,46 +126,58 @@ function left() {
   </div>`;
   $('#invite').onclick = () => share(`Play Games@Work with me: ${inviteLink()}`, 'Invite link copied');
   $('#logout').onclick = async () => { await api('/api/logout', {}); boot(); };
-  $('#delete').onclick = async () => {
-    if (!(await ask('Delete your account?', 'This removes your profile, every result and your connections, right away. It can’t be undone.', 'Delete'))) return;
-    await api('/api/delete-account', {});
-    try { localStorage.clear(); } catch {} // unfinished moves kept on this device
-    toast('Your account was deleted');
-    boot();
-  };
+  $('#delete').onclick = forget;
+}
+
+async function forget() {
+  const [title, text] = member()
+    ? ['Delete your account?', 'This removes your profile, every result and your connections, right away. It can’t be undone.']
+    : ['Forget your games?', 'This removes today’s results and your streak from this device and from our server. It can’t be undone.'];
+  if (!(await ask(title, text, 'Delete'))) return;
+  await api('/api/delete-account', {});
+  try { localStorage.clear(); } catch {} // unfinished moves kept on this device
+  toast(member() ? 'Your account was deleted' : 'Your games were deleted');
+  boot();
 }
 
 const lbRows = rows => rows.map(r => `<li class="${r.me ? 'me' : ''}${r.won === false ? ' lost' : ''}">${avatar(r)}<span class="nm">${esc(r.name)}</span>${r.hints ? `<i title="hints used">💡${r.hints}</i>` : ''}<b>${r.won === false ? '✗' : fmt(r.secs)}</b></li>`).join('');
 
 async function right() {
+  if (!member()) return ($('#right').innerHTML = `<div class="card"><h3>Your network today</h3>
+    <p class="muted">Sign in and invite colleagues to see everyone’s times here.</p></div>`);
   const board = await api('/api/leaderboard');
   const rows = Object.entries(GAMES).filter(([id]) => board[id]?.length).map(([id, g]) => `<h4>${g.icon} ${g.title}</h4><ol class="lb">${lbRows(board[id])}</ol>`).join('');
   $('#right').innerHTML = `<div class="card"><h3>Your network today</h3>${rows || `<p class="muted">No results yet today. Solve a puzzle and invite your connections.</p>`}</div>`;
 }
 
 async function inviteCard(uid) {
+  focus(false);
   const u = await api(`/api/user?uid=${encodeURIComponent(uid)}`).catch(() => null);
-  history.replaceState(null, '', '/');
-  if (!u) return home();
+  const done = () => { history.replaceState(null, '', '/'); home(); };
+  if (!u) return done();
   $('#center').innerHTML = `<div class="card hero">${avatar(u)}<h2>${esc(u.name)} invited you</h2>
-    <p class="muted">Connect to compare puzzle times every day.</p>
-    <div class="row center"><button class="btn" id="yes">Connect</button><button class="btn ghost" id="no">Not now</button></div></div>`;
-  $('#yes').onclick = async () => { await api('/api/connect', { uid }); me = await api('/api/me'); left(); right(); toast(`You’re now connected with ${u.name}`); home(); };
-  $('#no').onclick = home;
+    <p class="muted">${member() ? 'Connect to compare puzzle times every day.' : 'Sign in to connect and compare puzzle times every day.'}</p>
+    ${member() ? '<div class="row center"><button class="btn" id="yes">Connect</button><button class="btn ghost" id="no">Not now</button></div>'
+      : '<div id="invsign"></div><button class="btn ghost" id="no">Play first</button>'}</div>`;
+  if (!member()) signInBox($('#invsign')); // the invite stays in the address bar, so boot() lands back here signed in
+  $('#yes')?.addEventListener('click', async () => { await api('/api/connect', { uid }); me = await api('/api/me'); left(); right(); toast(`You’re now connected with ${u.name}`); done(); });
+  $('#no').onclick = done;
 }
 
 let tick, onKey;
 document.addEventListener('keydown', e => onKey?.(e));
 const stop = () => { clearInterval(tick); onKey = null; };
 
-const status = id => { const p = me.played[id]; return p ? (p.won ? '✓ ' + fmt(p.secs) : '✗ Tomorrow') : 'Play'; };
-const tile = id => `<button class="card tile" data-game="${id}" style="--theme:${GAMES[id].theme}">
-  <span class="icon">${GAMES[id].icon}</span><span><b>${GAMES[id].title}</b><br><span class="muted">#${cfg.num}</span></span>
-  <span class="status">${status(id)}</span></button>`;
+// Game cards: a drawing of the board on the game's colour, the name, and today's state.
+const status = id => { const p = me?.played[id]; return !p ? ['', 'Play'] : p.won ? ['done', '✓ ' + fmt(p.secs)] : ['lost', '✗ Tomorrow']; };
+const card = id => { const g = GAMES[id], [cls, label] = status(id);
+  return `<button class="gcard" data-game="${id}" style="--theme:${g.theme}"><span class="art">${art(id)}</span>
+    <span class="gmeta"><b>${g.title}</b><span class="st ${cls}">${label}</span></span></button>`; };
 const openTile = e => { const b = e.target.closest('[data-game]'); if (b) intro(b.dataset.game, b.dataset.day || cfg.day); };
 
 function home() {
   stop();
+  focus(false);
   const past = [];
   for (let d = new Date(cfg.day + 'T12:00Z'); ; ) {
     d.setUTCDate(d.getUTCDate() - 1);
@@ -166,40 +186,102 @@ function home() {
     past.push(day);
   }
   const ids = Object.keys(GAMES), logic = ids.filter(id => !GAMES[id].kind), ball = ids.filter(id => GAMES[id].kind === 'f');
-  $('#center').innerHTML = `<div class="card"><h2>Today’s puzzles</h2><p class="muted">Win one every day to keep your streak.</p></div>
-    <h3 class="sec">🧠 Logic</h3>${logic.map(tile).join('')}
-    <h3 class="sec">⚽ Football</h3>${ball.map(tile).join('')}
+  $('#center').innerHTML = `<div class="home-head"><h2>Today’s puzzles <span class="muted">#${cfg.num}</span></h2>
+    <p class="muted">${member() ? 'Win one every day to keep your streak.' : 'Pick one and press Start. No account needed.'}</p></div>
+    <h3 class="sec">Logic</h3><div class="gallery">${logic.map(card).join('')}</div>
+    <h3 class="sec">Football</h3><div class="gallery">${ball.map(card).join('')}</div>
     ${past.length ? `<div class="card"><h3>Archive</h3><p class="muted small">Practice past puzzles. They don’t count for the leaderboard.</p>
       ${past.map(day => `<div class="arch"><span>${new Date(day + 'T12:00').toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' })}</span>
-        ${Object.entries(GAMES).map(([id, g]) => `<button class="btn ghost small" data-game="${id}" data-day="${day}" title="${g.title}">${g.icon}</button>`).join('')}</div>`).join('')}</div>` : ''}`;
+        ${Object.entries(GAMES).map(([id, g]) => `<button class="mini-btn" data-game="${id}" data-day="${day}" title="${g.title}" style="--theme:${g.theme}">${art(id)}</button>`).join('')}</div>`).join('')}</div>` : ''}`;
   $('#center').onclick = openTile;
 }
 
 function intro(id, day) {
   const g = GAMES[id], practice = day !== cfg.day;
-  if (!practice && me.played[id]) return result(id, day, {});
+  if (!practice && me?.played[id]) return result(id, day, {});
+  focus(true);
   $('#center').onclick = null;
-  $('#center').innerHTML = `<div class="card hero" style="--theme:${g.theme}">
-    <div class="big">${g.icon}</div><h2>${g.title}</h2>
-    <p class="muted">${practice ? `Archive · ${day}` : `#${cfg.num}`}</p>
-    <p>${g.rules}</p>
-    <div class="row center"><button class="btn ghost" id="back">Back</button><button class="btn" id="start">${practice ? 'Practice' : 'Start'}</button></div>
-    ${practice ? '' : '<p class="muted small">The timer starts when you press Start and keeps running if you leave.</p>'}
+  $('#center').innerHTML = `<div class="card intro" style="--theme:${g.theme}">
+    <div class="art">${art(id)}</div>
+    <div class="intro-text">
+      <h2>${g.title} <span class="muted">${practice ? `· ${day}` : `#${cfg.num}`}</span></h2>
+      <p>${g.rules}</p>
+      <div class="row"><button class="btn ghost" id="back">Back</button><button class="btn" id="start">${practice ? 'Practice' : 'Start'}</button></div>
+      ${practice ? '' : '<p class="muted small">The timer starts when you press Start and keeps running if you leave.</p>'}
+    </div>
   </div>`;
   $('#back').onclick = home;
   $('#start').onclick = async () => {
     $('#start').disabled = true;
+    if (!me) { await api('/api/guest', {}); me = await api('/api/me'); left(); right(); } // first Start makes a guest session
     const data = await api(`/api/puzzle?game=${id}&day=${day}`);
     (data.football ? playFootball : play)(id, data);
   };
 }
 
+// Card art, 100×100: a small drawing of each board in white on the game's colour.
+const svg = body => `<svg viewBox="0 0 100 100" aria-hidden="true">${body}</svg>`;
+const at = (n, s, o) => i => [o + (i % n) * s, o + Math.floor(i / n) * s]; // cell index -> top-left corner
+const sq = (x, y, w, h, fill, extra = '') => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" ${extra}/>`;
+const txt = (x, y, t, size = 14, fill = '#1d1d1d') => `<text x="${x}" y="${y}" font-size="${size}" font-weight="800" text-anchor="middle" dominant-baseline="central" fill="${fill}" font-family="system-ui,sans-serif">${t}</text>`;
+const tee = (x, y, c, k = 0.55) => `<g transform="translate(${x} ${y}) scale(${k})"><path d="M11 9 16 5q4 3 8 0l5 4v28H11z" fill="${c}"/><path d="M11 9 4 13l3 7 4-3zM29 9l7 4-3 7-4-3z" fill="${c}" opacity=".8"/></g>`;
+const ARTS = {
+  queens() {
+    const reg = [0, 0, 1, 1, 1, 0, 2, 2, 1, 3, 0, 2, 4, 3, 3, 2, 2, 4, 4, 3, 2, 4, 4, 4, 3], p = at(5, 16, 10);
+    const crown = i => { const [x, y] = p(i); return `<path transform="translate(${x + 3} ${y + 4})" d="M0 9V3l2.5 2.5L5 0l2.5 5.5L10 3v6z" fill="#1d1d1d"/>`; };
+    return reg.map((r, i) => sq(...p(i), 16, 16, COLORS[r])).join('') + sq(10, 10, 80, 80, 'none', 'stroke="#1d1d1d" stroke-width="2.5"') + [1, 13, 20].map(crown).join('');
+  },
+  tango() {
+    const v = [0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0], p = at(4, 20, 10);
+    const mark = (i, x = p(i)[0] + 10, y = p(i)[1] + 10) => (v[i] ? `<circle cx="${x}" cy="${y}" r="6" fill="#4a77d4"/><circle cx="${x + 3}" cy="${y - 2}" r="5" fill="#fff"/>`
+      : `<circle cx="${x}" cy="${y}" r="6" fill="#ffc531" stroke="#f59e0b" stroke-width="2"/>`);
+    return v.map((_, i) => sq(...p(i), 20, 20, '#fff', 'stroke="#0002"') + mark(i)).join('') + txt(30, 40, '=', 9, '#6b6b6b') + txt(70, 60, '×', 9, '#6b6b6b');
+  },
+  zip() {
+    const order = [0, 1, 2, 3, 7, 6, 5, 4, 8, 9, 10, 11, 15, 14, 13, 12], c = i => [20 + (i % 4) * 20, 20 + Math.floor(i / 4) * 20];
+    return [...Array(16).keys()].map(i => sq(10 + (i % 4) * 20, 10 + Math.floor(i / 4) * 20, 20, 20, '#fff', 'stroke="#0002"')).join('')
+      + `<polyline points="${order.map(i => c(i).join(',')).join(' ')}" fill="none" stroke="#f05a28" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>`
+      + [[0, 1], [4, 2], [12, 3]].map(([i, n]) => `<circle cx="${c(i)[0]}" cy="${c(i)[1]}" r="7" fill="#1d1d1d"/>${txt(c(i)[0], c(i)[1], n, 9, '#fff')}`).join('');
+  },
+  patches() {
+    const rects = [[0, 0, 2, 2], [0, 2, 1, 3], [1, 2, 2, 3], [2, 0, 3, 2], [3, 2, 2, 3]];
+    return sq(10, 10, 80, 80, '#fff') + rects.map(([r, c, h, w], k) => sq(12 + c * 16, 12 + r * 16, w * 16 - 4, h * 16 - 4, PCOLORS[k], 'rx="4" fill-opacity=".55" stroke-width="2.5" stroke="' + PCOLORS[k] + '"')).join('');
+  },
+  sudoku() {
+    const d = [4, '', 1, '', 2, '', 6, '', 3], p = at(3, 26, 11);
+    return d.map((v, i) => sq(...p(i), 26, 26, '#fff', 'stroke="#0003"') + (v ? txt(p(i)[0] + 13, p(i)[1] + 13, v, 15) : '')).join('') + sq(11, 11, 78, 78, 'none', 'stroke="#1d1d1d" stroke-width="2.5"');
+  },
+  whoami: () => [[12, 10, '#e2423b'], [66, 10, '#2aa198'], [12, 58, '#f5b301'], [66, 58, '#3d7fe0']].map(([x, y, c]) => tee(x, y, c)).join('')
+    + sq(36, 34, 28, 32, '#fff', 'rx="6"') + txt(50, 50, '?', 20),
+  clues: () => [[10, 10, '31'], [54, 10, '1'], [10, 54, '?'], [54, 54, '?']].map(([x, y, t], k) => sq(x, y, 36, 36, k < 2 ? '#fff' : '#ffffff55', 'rx="6"') + txt(x + 18, y + 18, t, 16)).join(''),
+  grid() {
+    const p = at(3, 24, 26);
+    return [0, 1, 2].map(k => tee(24 + k * 24, 2, ['#e2423b', '#fff', '#2aa198'][k], 0.5) + sq(4, 28 + k * 24, 16, 16, ['#f5b301', '#3d7fe0', '#fff'][k], 'rx="8"')).join('')
+      + [...Array(9).keys()].map(i => sq(p(i)[0] + 1, p(i)[1] + 1, 21, 21, [0, 4, 8].includes(i) ? '#fff' : '#ffffff55', 'rx="4"')).join('');
+  },
+  links() {
+    const p = at(4, 21, 8);
+    return sq(8, 8, 82, 19, '#f9df6d', 'rx="4"') + [...Array(12).keys()].map(i => sq(p(i + 4)[0], p(i + 4)[1], 19, 19, [5, 10].includes(i) ? '#5a594e' : '#efefe6', 'rx="4"')).join('');
+  },
+  bingo() {
+    const p = at(4, 21, 8);
+    return [...Array(12).keys()].map(i => sq(p(i)[0], p(i)[1] + 18, 19, 19, [1, 6, 8].includes(i) ? '#fff' : '#ffffff55', 'rx="4"')).join('')
+      + `<circle cx="50" cy="13" r="10" fill="none" stroke="#fff" stroke-width="3"/>` + txt(50, 13, '90', 8, '#fff');
+  },
+  hotcold: () => `<defs><linearGradient id="hc"><stop offset="0" stop-color="#3d7fe0"/><stop offset=".5" stop-color="#f5b301"/><stop offset="1" stop-color="#e2423b"/></linearGradient></defs>`
+    + [[16, 30], [42, 55], [68, 88]].map(([y, w]) => sq(10, y, 80, 18, '#fff', 'rx="5"') + sq(16, y + 6, w * 0.7, 6, 'url(#hc)', 'rx="3"')).join(''),
+  top10: () => [...Array(5).keys()].map(k => `<circle cx="17" cy="${16 + k * 17}" r="7" fill="#fff"/>${txt(17, 16 + k * 17, k + 1, 8)}`
+    + sq(28, 10 + k * 17, 62, 12, k < 2 ? '#cdeed6' : '#ffffff55', 'rx="4"')).join(''),
+};
+const art = id => svg(ARTS[id]());
+
 // ---------- the game screen: shared toolbar, history, timer, rule messages; per-game boards below ----------
 function play(id, data) {
   stop();
+  focus(true);
   const g = GAMES[id], p = data.puzzle, practice = !data.play, key = `gg:${data.day}:${id}`;
   $('#center').innerHTML = `<div class="card game" style="--theme:${g.theme}">
-    <div class="row"><button class="btn ghost small" id="back" aria-label="Back">←</button><b>${g.icon} ${g.title} ${practice ? data.day : '#' + data.num}</b><span id="timer">0:00</span></div>
+    <div class="row"><button class="btn ghost small" id="back" aria-label="Back">←</button><b class="gtitle"><span class="mini">${art(id)}</span>${g.title} ${practice ? data.day : '#' + data.num}</b><span id="timer">0:00</span></div>
     <div id="board"></div>
     <div class="row center tools"><button class="btn ghost small" id="undo">↶ Undo</button><button class="btn ghost small" id="clear">Clear</button><button class="btn ghost small" id="hint">💡 Hint</button></div>
     <div id="errs" aria-live="polite"></div>
@@ -268,10 +350,11 @@ function play(id, data) {
 // ---------- results: one template for every game, themed by the game's colour ----------
 async function result(id, day, res) {
   stop();
+  focus(true);
   const g = GAMES[id];
   $('#center').onclick = null;
   if (res.practice) {
-    $('#center').innerHTML = `<div class="card result" style="--theme:${g.theme}"><div class="res-hero"><div class="big pop">${g.icon}</div>
+    $('#center').innerHTML = `<div class="card result" style="--theme:${g.theme}"><div class="res-hero"><div class="res-art pop">${art(id)}</div>
       <h2>${res.won === false ? 'Practice over' : 'Practice solved!'}</h2><div class="res-inner"><span class="pill">${fmt(res.secs)}</span><span class="muted small">Archive puzzles don’t count for the leaderboard.</span></div></div>
       <div class="row center"><button class="btn ghost" id="next">More puzzles</button></div></div>`;
     return ($('#next').onclick = home);
@@ -282,9 +365,11 @@ async function result(id, day, res) {
   const line = g.kind === 'f' ? res.share : fmt(res.secs);
   const text = `${g.title} #${cfg.num} ${g.icon}\n${line}${g.kind === 'f' ? ` · ${fmt(res.secs)}` : ''}${res.hints ? ` · 💡${res.hints}` : ''}\n🔥 ${res.streak}-day streak\nPlay with me: ${inviteLink()}`;
   const s = res.stats, others = Object.keys(GAMES).filter(k => k !== id && !me.played[k]);
+  const network = member() ? (res.board.length > 1 ? `<ol class="lb">${lbRows(res.board)}</ol>` : `<p class="muted">Invite connections to compare times here. <button class="link" id="inv">Invite</button></p>`)
+    : `<p class="muted">Sign in to keep this result and compare times with your colleagues.</p><div id="ressign"></div>`;
   $('#center').innerHTML = `<div class="card result" style="--theme:${g.theme}">
     <div class="res-hero">
-      <div class="big pop">${g.icon}</div>
+      <div class="res-art pop">${art(id)}</div>
       <div class="small">${g.title} #${cfg.num}</div>
       <h2>See you tomorrow.</h2>
       <div class="res-inner">
@@ -294,12 +379,12 @@ async function result(id, day, res) {
       </div>
     </div>
     <h3>Your network</h3>
-    ${res.board.length > 1 ? `<ol class="lb">${lbRows(res.board)}</ol>` : `<p class="muted">Invite connections to compare times here. <button class="link" id="inv">Invite</button></p>`}
+    ${network}
     <div class="stats">${[[s.played, 'played'], [s.winPct + '%', 'win rate'], [s.best != null ? fmt(s.best) : '–', 'best time'], [s.maxStreak, 'max streak']]
       .map(([v, l]) => `<div><b>${v}</b><span>${l}</span></div>`).join('')}</div>
     <div class="week"><b>🔥 ${s.streak}-day ${g.title} streak</b><div>${res.week.map(w =>
       `<span class="${w.won ? 'on' : ''}" title="${w.day}">${new Date(w.day + 'T12:00').toLocaleDateString(LOCALE, { weekday: 'narrow' })}</span>`).join('')}</div></div>
-    ${others.length ? `<h3>Play another</h3><div id="more">${others.map(tile).join('')}</div>` : ''}
+    ${others.length ? `<h3>Play another</h3><div id="more" class="gallery">${others.map(card).join('')}</div>` : ''}
     <div class="row center"><button class="btn ghost" id="next">All puzzles</button></div>
   </div>`;
   $('#next').onclick = home;
@@ -307,6 +392,7 @@ async function result(id, day, res) {
   $('#copy').onclick = () => copy(text, 'Result copied');
   $('#inv')?.addEventListener('click', () => share(`Play Games@Work with me: ${inviteLink()}`, 'Invite link copied'));
   $('#more')?.addEventListener('click', openTile);
+  if (!member()) signInBox($('#ressign'));
 }
 
 async function copy(text, done) {
@@ -362,10 +448,11 @@ function searchBox(el, onPick) {
 
 function playFootball(id, data) {
   stop();
+  focus(true);
   const g = GAMES[id], practice = !data.play, ui = FBOARDS[id], local = {};
   let view = data.view, busy = false, finished = data.done;
   $('#center').innerHTML = `<div class="card game f-${id}" style="--theme:${g.theme}">
-    <div class="row"><button class="btn ghost small" id="back" aria-label="Back">←</button><b>${g.icon} ${g.title} ${practice ? data.day : '#' + data.num}</b><span id="timer">0:00</span></div>
+    <div class="row"><button class="btn ghost small" id="back" aria-label="Back">←</button><b class="gtitle"><span class="mini">${art(id)}</span>${g.title} ${practice ? data.day : '#' + data.num}</b><span id="timer">0:00</span></div>
     <div id="fboard"></div>
     <div id="fmsg" aria-live="polite"></div>
     <div id="fask"></div>
