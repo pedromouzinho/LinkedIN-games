@@ -69,6 +69,28 @@ console.log(`ok: ${days} days, slowest ms`, Object.fromEntries(Object.entries(sl
   console.log('ok: rule reporting');
 }
 
+// explained hints: following them from an empty board solves the puzzle, every step agrees with the solution
+{
+  for (let day = 1; day <= Math.min(days, 30); day++) {
+    const r = G.rng(day * 7919);
+    const q = G.queensGen(r), queens = [], crosses = [];
+    for (let h; queens.length < q.n; ) {
+      h = G.queensHint(q, queens, crosses);
+      assert(h && h.why && h.area.length, 'queens: a reasoned hint until solved');
+      if (h.cell != null) { assert(q.solution.includes(h.cell), 'queens hint places a real queen'); queens.push(h.cell); }
+      else { assert(h.cross.every(x => !q.solution.includes(x)), 'queens hint never crosses a queen'); crosses.push(...h.cross); }
+    }
+    for (const [p, next] of [[G.tangoGen(r), (p, g) => G.tangoHint(p, g)], [G.sudokuGen(r), (p, g) => G.sudokuStep(g)]]) {
+      const g = [...p.given];
+      for (let h; g.includes(null); g[h.cell] = h.value) {
+        h = next(p, g);
+        assert(h && h.why && h.area.length && h.value === p.solution[h.cell], 'tango/sudoku: each hint is a reasoned, correct cell');
+      }
+    }
+  }
+  console.log('ok: explained hints');
+}
+
 // ---------- football games ----------
 {
   const { FOOTBALL: F, BANDS: FB, PLAYERS, fits, matching } = await import('./football.js');

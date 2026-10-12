@@ -35,20 +35,37 @@ function ask(title, text, action) {
   return new Promise(res => d.addEventListener('close', () => { res(d.returnValue === 'ok'); d.remove(); }));
 }
 
+const NOUN = { row: 'row', col: 'column', region: 'color', box: 'box' }, SYM = ['☀', '☾'];
 const GAMES = {
   queens: { title: 'Kings', icon: '👑', theme: '#6f4bb7',
     rules: 'One ♚ in each row, column and color region. Kings can’t touch, not even diagonally. Tap for ✕, tap again for ♚. Drag to mark ✕.',
-    msgs: { row: 'Each row can only have one ♚.', col: 'Each column can only have one ♚.', region: 'Each color region can only have one ♚.', touch: 'Two ♚ can’t touch, not even diagonally.' } },
+    msgs: { row: 'Each row can only have one ♚.', col: 'Each column can only have one ♚.', region: 'Each color region can only have one ♚.', touch: 'Two ♚ can’t touch, not even diagonally.' },
+    tips: {
+      last: h => `Every other cell in this ${NOUN[h.unit]} is ruled out, so its ♚ goes here.`,
+      confine: h => h.k === 1 ? `This ${NOUN[h.a]} only has room in one ${NOUN[h.b]}, so the rest of that ${NOUN[h.b]} can’t hold a ♚. Marked ✕.`
+        : `These ${h.k} ${NOUN[h.a]}s only have room in ${h.k} ${NOUN[h.b]}s, so the rest of those ${NOUN[h.b]}s can’t hold a ♚. Marked ✕.`,
+      block: h => `A ♚ here would leave no room in the highlighted ${NOUN[h.unit]}. Marked ✕.`,
+    } },
   tango: { title: 'Solo', icon: '🌗', theme: '#22314f',
     rules: 'Fill with suns and moons. Each row and column has 3 of each, never 3 in a row. = means same, × means opposite.',
-    msgs: { three: 'No more than 2 ☀ or ☾ can be next to each other.', count: 'Each row and column has exactly 3 ☀ and 3 ☾.', sign: 'Cells joined by = must match, cells joined by × must differ.' } },
+    msgs: { three: 'No more than 2 ☀ or ☾ can be next to each other.', count: 'Each row and column has exactly 3 ☀ and 3 ☾.', sign: 'Cells joined by = must match, cells joined by × must differ.' },
+    tips: {
+      sign: h => `The sign next to it decides: this is ${SYM[h.value]}.`,
+      three: h => `Another ${SYM[1 - h.value]} would make three in a row, so this is ${SYM[h.value]}.`,
+      count: h => `This line already has its three ${SYM[1 - h.value]}, so this is ${SYM[h.value]}.`,
+      line: h => `Every valid way to finish this line puts ${SYM[h.value]} here.`,
+    } },
   zip: { title: 'Unzip', icon: '🔗', theme: '#d9541e', rules: 'Drag one path through the numbers in order. Fill every cell. Thick lines are walls.' },
   patches: { title: 'Holes', icon: '🕳️', theme: '#c2417a',
     rules: 'Fill the grid with rectangles. Each one covers exactly one clue and takes its shape (square, wide, tall or any); a number is its area. Drag to draw, tap a rectangle to remove it.',
     msgs: { clues: 'Each rectangle must cover exactly one clue.', shape: 'A rectangle must have the shape shown on its clue.', size: 'A rectangle’s area must match its number.' } },
   sudoku: { title: 'Maxi Sudoku', icon: '🔢', theme: '#2f8f5b',
     rules: 'Fill 1–6 so every row, column and 2×3 box has each number once. Turn on ✏️ Notes to pencil in candidates.',
-    msgs: { row: 'Each row can only have one of each number.', col: 'Each column can only have one of each number.', box: 'Each 2×3 box can only have one of each number.' } },
+    msgs: { row: 'Each row can only have one of each number.', col: 'Each column can only have one of each number.', box: 'Each 2×3 box can only have one of each number.' },
+    tips: {
+      only: h => `${h.value} has only one place left in this ${NOUN[h.unit]}.`,
+      single: h => `Its row, column and box already use every other number, so this is ${h.value}.`,
+    } },
 };
 
 // Football trivia: answers stay on the server, the board renders whatever view the server sends back.
@@ -284,6 +301,7 @@ function play(id, data) {
     <div class="row"><button class="btn ghost small" id="back" aria-label="Back">←</button><b class="gtitle"><span class="mini">${art(id)}</span>${g.title} ${practice ? data.day : '#' + data.num}</b><span id="timer">0:00</span></div>
     <div id="board"></div>
     <div class="row center tools"><button class="btn ghost small" id="undo">↶ Undo</button><button class="btn ghost small" id="clear">Clear</button><button class="btn ghost small" id="hint">💡 Hint</button></div>
+    <div id="tip" aria-live="polite"></div>
     <div id="errs" aria-live="polite"></div>
     <p class="muted small">${g.rules}</p>
   </div>`;
@@ -298,7 +316,7 @@ function play(id, data) {
   const undo = [];
   let snap = null, solved = false;
   const ctx = {
-    before: () => { snap = JSON.stringify(game.get()); },
+    before: () => { snap = JSON.stringify(game.get()); clearTip(); },
     after: () => {
       const cur = JSON.stringify(game.get());
       if (snap != null && snap !== cur) { undo.push(snap); snap = null; }
@@ -339,10 +357,16 @@ function play(id, data) {
   $('#clear').onclick = async () => {
     if (await ask('Clear the board?', 'This removes all your moves. The timer keeps running.', 'Clear')) { ctx.before(); game.reset(); ctx.after(); }
   };
+  // Hints say why: the reason, with the cells that prove it outlined until the next move.
+  function clearTip() { $('#tip').innerHTML = ''; cells.forEach(c => c.classList.remove('proof')); }
   $('#hint').onclick = async () => {
-    const h = await api('/api/hint', { game: id, day: data.day, state: game.answer() });
+    const h = await api('/api/hint', { game: id, day: data.day, state: game.answer(), crosses: game.crosses?.() });
     if (h.wrong != null || h.truncate != null) toast('Found a mistake');
     game.hint(h);
+    const say = h.why && g.tips?.[h.why];
+    if (!say) return;
+    $('#tip').innerHTML = `<div class="tip">💡 ${esc(say(h))}</div>`;
+    h.area.forEach(i => cells[i]?.classList.add('proof'));
   };
   redraw();
 }
@@ -645,7 +669,14 @@ const BOARDS = {
         return { win: G.queensCheck(p, queens()).win, rules };
       },
       get: () => marks, set: s => (marks = [...s]), reset: () => marks.fill(0), answer: queens,
-      hint(h) { if (h.wrong != null) return ctx.flash(h.wrong); ctx.before(); marks[h.cell] = 2; ctx.after(); ctx.flash(h.cell); },
+      crosses: () => marks.flatMap((m, i) => (m === 1 ? [i] : [])),
+      hint(h) {
+        if (h.wrong != null) return ctx.flash(h.wrong);
+        ctx.before();
+        if (h.cross) h.cross.forEach(x => (marks[x] ||= 1)); else marks[h.cell] = 2;
+        ctx.after();
+        if (h.cell != null) ctx.flash(h.cell);
+      },
     };
   },
 

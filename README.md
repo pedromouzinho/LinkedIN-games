@@ -16,7 +16,8 @@ connect with colleagues through invite links and compare results on a shared lea
   fits exactly one group, every Bingo board can be completed from its first 25 players.
 - **Server owns the game.** Puzzles are generated from a secret seed and stored in Firestore; the browser
   never receives the solution. The timer starts on the server when you press Start, survives reloads,
-  and only the first solve counts. Answers are validated on the server. Hints are counted (💡).
+  and only the first solve counts. Answers are validated on the server. Hints are counted (💡) and, in Kings, Solo and Maxi Sudoku, say why:
+  the rule that forces the move, with the cells that prove it outlined. `node test.mjs` replays them to the end.
 
 ## Football data
 `data/football.json` is built from Wikidata (CC0) and English Wikipedia: men's players with articles in 30+ Wikipedias,

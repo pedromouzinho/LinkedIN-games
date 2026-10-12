@@ -99,6 +99,43 @@ export function queensLogic({ n, regions }) {
   }
 }
 
+// Next deduction from a mistake-free position, with its reason: a queen to place ({ cell }) or cells to cross out
+// ({ cross }). area = the cells that prove it. Same rules as queensLogic, so a solvable puzzle always yields a step.
+export function queensHint({ n, regions }, queens, crosses = []) {
+  const units = {
+    row: range(n).map(r => range(n).map(c => r * n + c)),
+    col: range(n).map(c => range(n).map(r => r * n + c)),
+    region: range(n).map(k => range(n * n).filter(i => regions[i] === k)),
+  };
+  const hits = c => [...units.row[Math.floor(c / n)], ...units.col[c % n], ...units.region[regions[c]], ...nb8(c, n)];
+  const cand = new Set(range(n * n));
+  queens.forEach(q => hits(q).forEach(x => cand.delete(x)));
+  crosses.forEach(x => cand.delete(x));
+  const open = kind => units[kind].filter(u => !u.some(x => queens.includes(x)));
+  for (const unit of ['row', 'col', 'region'])
+    for (const u of open(unit)) {
+      const cs = u.filter(x => cand.has(x));
+      if (cs.length === 1) return { cell: cs[0], why: 'last', unit, area: u };
+    }
+  for (let k = 1; k <= 3; k++)
+    for (const [a, b] of [['region', 'row'], ['region', 'col'], ['row', 'region'], ['col', 'region']])
+      for (const set of combos(open(a), k)) {
+        const inSet = new Set(set.flat());
+        const covered = open(b).filter(u => u.some(x => cand.has(x) && inSet.has(x)));
+        if (covered.length !== k) continue;
+        const cross = covered.flat().filter(x => cand.has(x) && !inSet.has(x));
+        if (cross.length) return { cross, why: 'confine', k, a, b, area: [...inSet] };
+      }
+  for (const c of cand) {
+    const gone = new Set(hits(c));
+    for (const unit of ['row', 'col', 'region']) {
+      const u = open(unit).find(u => !u.includes(c) && u.every(x => !cand.has(x) || gone.has(x)));
+      if (u) return { cross: [c], why: 'block', unit, area: u };
+    }
+  }
+  return null;
+}
+
 function queensCount(n, regions, limit = 2) {
   let count = 0;
   const cols = [], used = new Set();
@@ -186,9 +223,34 @@ export function tangoStep(g, edges) {
     if (!fits.length) return false;
     for (let k = 0; k < T; k++)
       if (g[L[k]] == null && fits.every(p => p[k] === fits[0][k]) && (!best || fits.length < best.options))
-        best = { cell: L[k], value: fits[0][k], options: fits.length };
+        best = { cell: L[k], value: fits[0][k], options: fits.length, line: L };
   }
   return best;
+}
+
+// Hint with its reason. Simple rules first (the other symbol would break a sign, make three in a row or overfill
+// a line), then the line-pattern deduction. area = the cells that prove it.
+export function tangoHint({ edges }, g) {
+  const breaks = (c, o) => { // what placing o at c would break
+    for (const e of edges) {
+      const x = e.a === c ? e.b : e.b === c ? e.a : -1;
+      if (x >= 0 && g[x] != null && (g[x] === o) !== e.eq) return { why: 'sign', area: [c, x] };
+    }
+    for (const L of LINES.filter(L => L.includes(c))) {
+      if (L.filter(x => g[x] === o).length === T / 2) return { why: 'count', area: L };
+      const k = L.indexOf(c);
+      for (let j = Math.max(0, k - 2); j <= Math.min(k, T - 3); j++) {
+        const w = L.slice(j, j + 3);
+        if (w.every(x => x === c || g[x] === o)) return { why: 'three', area: w };
+      }
+    }
+    return null;
+  };
+  for (let c = 0; c < T * T; c++)
+    if (g[c] == null)
+      for (const v of [0, 1]) { const b = breaks(c, 1 - v); if (b) return { cell: c, value: v, ...b }; }
+  const s = tangoStep(g, edges);
+  return s ? { cell: s.cell, value: s.value, why: 'line', area: s.line } : null;
 }
 
 export function tangoLogic(given, edges) {
@@ -259,18 +321,19 @@ const sudokuOk = (g, i, v) => PEERS[i].every(x => g[x] !== v);
 const DIGITS = range(S).map(v => v + 1);
 
 // One deduction: hidden single (a digit with one spot in a unit) or naked single (a cell with one digit left).
+// why/unit/area explain it for hints.
 export function sudokuStep(g) {
-  for (const u of UNITS)
+  for (const [k, u] of UNITS.entries())
     for (const v of DIGITS) {
       if (u.some(x => g[x] === v)) continue;
       const spots = u.filter(x => g[x] == null && sudokuOk(g, x, v));
       if (!spots.length) return false;
-      if (spots.length === 1) return { cell: spots[0], value: v };
+      if (spots.length === 1) return { cell: spots[0], value: v, why: 'only', unit: ['row', 'col', 'box'][Math.floor(k / S)], area: u };
     }
   for (let i = 0; i < S * S; i++) {
     if (g[i] != null) continue;
     const c = DIGITS.filter(v => sudokuOk(g, i, v));
-    if (c.length === 1) return { cell: i, value: c[0] };
+    if (c.length === 1) return { cell: i, value: c[0], why: 'single', area: PEERS[i] };
   }
   return null;
 }

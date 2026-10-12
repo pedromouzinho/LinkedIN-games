@@ -70,8 +70,8 @@ const checkers = {
   patches: (p, a) => G.patchesCheck(p, a),
 };
 
-// Hint: first mistake if any, otherwise one correct move.
-function hint(game, p, a) {
+// Hint: first mistake if any, otherwise the next deduction with its reason (why + area) where the game has one.
+function hint(game, p, a, crosses) {
   a = list(a);
   const sol = p.solution;
   if (game === 'zip') {
@@ -85,13 +85,16 @@ function hint(game, p, a) {
     return { rect: p.solution.find(r => !placed.has(key(r))) };
   }
   if (game === 'queens') {
-    const wrong = a.find(x => !sol.includes(x));
-    return wrong != null ? { wrong } : { cell: sol.find(x => !a.includes(x)) };
+    const xs = list(crosses).filter(i => Number.isInteger(i) && i >= 0 && i < p.n * p.n);
+    const wrong = a.find(x => !sol.includes(x)) ?? xs.find(i => sol.includes(i)); // a ✕ on a queen's cell is a mistake too
+    if (wrong != null) return { wrong };
+    return G.queensHint(p, a, xs) || { cell: sol.find(x => !a.includes(x)) };
   }
   const g = grid(p, a), wrong = g.findIndex((v, i) => v != null && v !== sol[i]);
   if (wrong >= 0) return { wrong };
-  const step = game === 'tango' ? G.tangoStep(g, p.edges) : G.sudokuStep(g);
-  const cell = step ? step.cell : g.findIndex(v => v == null);
+  const h = game === 'tango' ? G.tangoHint(p, g) : G.sudokuStep(g);
+  if (h) return { ...h, value: sol[h.cell] };
+  const cell = g.findIndex(v => v == null);
   return { cell, value: sol[cell] };
 }
 
@@ -315,7 +318,7 @@ const routes = {
     if (!checkers[game]) throw Object.assign(new Error('no hints in this game'), { status: 400 });
     const p = await puzzle(day, game);
     if (day === today()) await playRef(day, game, uid).update({ hints: FieldValue.increment(1) }).catch(() => {});
-    return hint(game, p, body.state);
+    return hint(game, p, body.state, body.crosses);
   },
 };
 const PUBLIC = new Set(['GET /api/config', 'POST /api/login', 'POST /api/dev-login', 'POST /api/logout', 'POST /api/guest',
