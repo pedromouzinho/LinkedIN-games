@@ -16,23 +16,20 @@ for (const c of Object.values(CLUBS)) if (c.league && c.sl >= 60) (topLeague[c.c
 for (const c of Object.values(CLUBS))
   if (!c.league && c.sl >= 60 && topLeague[c.country]) c.league = Object.entries(topLeague[c.country]).sort((a, b) => b[1] - a[1])[0][0];
 
-// Fame = English Wikipedia views over the last year (p.v). Hidden answers are mostly the best known players,
-// with a few lesser-known ones; grids, links and bingo draw from the wider known pool.
-const RANKED = PLAYERS.filter(p => p.born >= 1970 && p.maxClub >= 60).sort((a, b) => b.v - a.v);
-const FAMOUS = RANKED.slice(0, 600), TIER_B = RANKED.slice(0, 2000), LESSER = TIER_B.slice(600);
-const answer = r => pick(r() < 0.85 ? FAMOUS : LESSER, r);
-const IN_B = new Set(TIER_B.map(p => p.id));
+// Only the 700 most viewed players (English Wikipedia, last 12 months) who played for a well-known club. Those still
+// playing and the retired legends are separate pools: each game exists once per pool and never mixes them.
+const TOP = PLAYERS.filter(p => p.maxClub >= 60).sort((a, b) => b.v - a.v).slice(0, 700);
+const playing = p => p.clubs.some(c => c[2] == null && c[1] >= 2005); // an open spell: still at a club
+export const POOLS = { active: TOP.filter(playing), legends: TOP.filter(p => !playing(p)) };
 const mainClub = p => CLUBS[p.clubs.reduce((a, b) => ((b[3] ?? 0) > (a[3] ?? 0) ? b : a))[0]].name; // most league games
 const BIG_CLUBS = Object.keys(CLUBS).filter(c => CLUBS[c].sl >= 80);
-const natCount = TIER_B.reduce((m, p) => m.set(p.nat, (m.get(p.nat) || 0) + 1), new Map());
-const NATS = [...natCount].filter(([c, k]) => c && k >= 15).map(([c]) => c);
 
 export const BANDS = {
   grid: { minAnswers: 3, hardCells: [2, 5], guesses: 12 }, // hard cell = 6 or fewer well-known answers
   links: { mistakes: 4, herrings: [2, 99] },                // herring = two players from different groups sharing a club
   bingo: { secs: 90, solvableWithin: 25 },                  // all 12 squares fillable from the first 25 players
   hotcold: { guesses: 10 },
-  top10: { lives: 3, known: 6 },                            // at least 6 of the 10 are well-known players
+  top10: { lives: 3 },
 };
 
 const range = n => [...Array(n).keys()];
@@ -40,7 +37,6 @@ const shuffle = (a, r) => { a = [...a]; for (let i = a.length - 1; i > 0; i--) {
 const pick = (a, r) => a[Math.floor(r() * a.length)];
 const inBand = (v, [lo, hi]) => v >= lo && v <= hi;
 const fail = msg => Object.assign(new Error(msg), { status: 400 });
-const player = id => BY_ID.get(id) || (() => { throw fail('Pick a player from the list'); })();
 const regionNames = new Intl.DisplayNames(['en'], { type: 'region' });
 const HOME = { 'GB-ENG': 'England', 'GB-SCT': 'Scotland', 'GB-WLS': 'Wales', 'GB-NIR': 'Northern Ireland' };
 export const nationName = code => (code ? HOME[code] || regionNames.of(code.slice(0, 2)) : '?');
@@ -57,13 +53,6 @@ const fits = (p, cat) => (cat.t === 'club' ? p.clubIds.has(cat.id) : cat.t === '
 const catView = cat => (cat.t === 'club' ? { t: 'club', ...clubView(cat.id) } : cat.t === 'nat' ? { t: 'nat', id: cat.id, name: nationName(cat.id) } : { t: 'pos', id: cat.id, name: POS[cat.id] + 's' });
 const done = (state, won, score) => ({ ...state, done: true, won, score });
 
-// Well-known players per category, cached: the grid generator intersects these a lot.
-const memberCache = new Map();
-const members = cat => {
-  const key = cat.t + cat.id;
-  if (!memberCache.has(key)) memberCache.set(key, new Set(TIER_B.filter(p => fits(p, cat)).map(p => p.id)));
-  return memberCache.get(key);
-};
 
 // Distinct clubs a player actually played for (apps unknown or >= 1), merged across spells, oldest first.
 function career(p) {
@@ -89,7 +78,21 @@ function matching(ids, cats) {
   return ids.filter((_, i) => tryPlayer(i, new Set())).length;
 }
 
-export const FOOTBALL = {
+// The seven games over one pool of players: answers, guesses, grid/links/bingo picks and top 10 lists all come from it.
+function games(pool) {
+  const inPool = new Set(pool.map(p => p.id));
+  const player = id => (inPool.has(id) ? BY_ID.get(id) : (() => { throw fail('Pick a player from the list'); })());
+  const answer = r => pick(pool, r);
+  const natCount = pool.reduce((m, p) => m.set(p.nat, (m.get(p.nat) || 0) + 1), new Map());
+  const NATS = [...natCount].filter(([c, k]) => c && k >= 8).map(([c]) => c);
+  const memberCache = new Map(); // players per category, cached: the grid generator intersects these a lot
+  const members = cat => {
+    const key = cat.t + cat.id;
+    if (!memberCache.has(key)) memberCache.set(key, new Set(pool.filter(p => fits(p, cat)).map(p => p.id)));
+    return memberCache.get(key);
+  };
+  const gridClubs = BIG_CLUBS.filter(id => members({ t: 'club', id }).size >= 12); // enough pool players to share squares
+  return {
   // "I played for these 4 clubs. Who am I?" One club shown, each miss or skip shows the next.
   whoami: {
     gen(r) {
@@ -162,9 +165,9 @@ export const FOOTBALL = {
     gen(r) {
       const both = (a, b) => [...members(a)].filter(id => members(b).has(id)).length;
       for (;;) {
-        const rows = shuffle(BIG_CLUBS, r).slice(0, 3).map(id => ({ t: 'club', id }));
+        const rows = shuffle(gridClubs, r).slice(0, 3).map(id => ({ t: 'club', id }));
         const ok = c => rows.every(row => both(row, c) >= BANDS.grid.minAnswers);
-        const clubs = shuffle(BIG_CLUBS, r).filter(id => !rows.some(x => x.id === id)).map(id => ({ t: 'club', id })).filter(ok);
+        const clubs = shuffle(gridClubs, r).filter(id => !rows.some(x => x.id === id)).map(id => ({ t: 'club', id })).filter(ok);
         const nats = shuffle(NATS, r).map(id => ({ t: 'nat', id })).filter(ok);
         const k = 1 + Math.floor(r() * 2);
         if (clubs.length < 3 - k || nats.length < k) continue;
@@ -191,7 +194,7 @@ export const FOOTBALL = {
     view: (p, s) => ({
       cats: p.cats.map(catView), guessesLeft: BANDS.grid.guesses - s.guesses,
       cells: s.cells.map((id, i) => (id ? { name: BY_ID.get(id).name, ok: true, photo: photo(id) }
-        : s.done ? { name: TIER_B.filter(q => fits(q, p.cats[Math.floor(i / 3)]) && fits(q, p.cats[3 + (i % 3)])).slice(0, 3).map(q => q.name).join(', '), ok: false } : null)),
+        : s.done ? { name: pool.filter(q => fits(q, p.cats[Math.floor(i / 3)]) && fits(q, p.cats[3 + (i % 3)])).slice(0, 3).map(q => q.name).join(', '), ok: false } : null)),
     }),
     share: (p, s) => [0, 3, 6].map(i => s.cells.slice(i, i + 3).map(c => (c ? '🟩' : '⬜')).join('')).join('\n'),
   },
@@ -203,7 +206,7 @@ export const FOOTBALL = {
       for (;;) {
         const nNat = 1 + Math.floor(r() * 2);
         const cats = [...shuffle(NATS, r).slice(0, nNat).map(id => ({ t: 'nat', id })), ...shuffle(clubPool, r).slice(0, 4 - nNat).map(id => ({ t: 'club', id }))];
-        const groups = cats.map(cat => shuffle(TIER_B.filter(p => fits(p, cat) && cats.every(c => c === cat || !fits(p, c))), r).slice(0, 4));
+        const groups = cats.map(cat => shuffle(pool.filter(p => fits(p, cat) && cats.every(c => c === cat || !fits(p, c))), r).slice(0, 4));
         if (groups.some(g => g.length < 4)) continue;
         const all = groups.flat(), herrings = all.flatMap((a, i) => all.slice(i + 1).filter(b =>
           groups.findIndex(g => g.includes(a)) !== groups.findIndex(g => g.includes(b)) && [...a.clubIds].some(c => b.clubIds.has(c)))).length;
@@ -237,7 +240,8 @@ export const FOOTBALL = {
       return {
         solved: (s.done ? [...s.solved, ...range(4).filter(g => !s.solved.includes(g))] : s.solved)
           .map(g => ({ title: title(p.groups[g].cat), level: p.groups[g].level, names: p.groups[g].ids.map(id => BY_ID.get(id).name), found: s.solved.includes(g) })),
-        cards: s.done ? [] : p.order.filter(id => !s.solved.some(g => p.groups[g].ids.includes(id))).map(id => ({ id, name: BY_ID.get(id).name })),
+        // a face when there is one, so you have to recognise the player
+        cards: s.done ? [] : p.order.filter(id => !s.solved.some(g => p.groups[g].ids.includes(id))).map(id => ({ id, photo: photo(id), name: photo(id) ? null : BY_ID.get(id).name })),
         mistakes: s.mistakes, maxMistakes: BANDS.links.mistakes,
       };
     },
@@ -254,7 +258,7 @@ export const FOOTBALL = {
         const sure = [];
         for (const c of cats) { const id = shuffle([...members(c)], r).find(x => !sure.includes(x)); if (id) sure.push(id); }
         if (sure.length < 12) continue;
-        const rest = shuffle(TIER_B.map(p => p.id).filter(id => !sure.includes(id)), r);
+        const rest = shuffle(pool.map(p => p.id).filter(id => !sure.includes(id)), r);
         const fitting = rest.filter(id => cats.some(c => fits(BY_ID.get(id), c))), others = rest.filter(id => !cats.some(c => fits(BY_ID.get(id), c)));
         const head = shuffle([...sure, ...fitting.slice(0, 7), ...others.slice(0, 6)], r);
         return { cats, stream: [...head, ...shuffle([...fitting.slice(7, 30), ...others.slice(6, 18)], r)] };
@@ -277,7 +281,7 @@ export const FOOTBALL = {
     },
     view: (p, s, elapsed = 0) => ({
       cats: p.cats.map(catView), cells: s.cells.map(id => (id ? BY_ID.get(id).name : null)), wrong: s.last,
-      current: s.done ? null : { name: BY_ID.get(p.stream[s.at]).name, photo: photo(p.stream[s.at]) }, left: p.stream.length - s.at,
+      current: s.done ? null : { photo: photo(p.stream[s.at]), name: photo(p.stream[s.at]) ? null : BY_ID.get(p.stream[s.at]).name }, left: p.stream.length - s.at,
       remaining: Math.max(0, BANDS.bingo.secs - elapsed),
     }),
     share: (p, s) => `${s.cells.filter(Boolean).length}/12`,
@@ -288,7 +292,7 @@ export const FOOTBALL = {
     gen(r) {
       for (;;) {
         const p = answer(r);
-        if (p.born >= 1980 && p.h && p.pos.length && p.nat) return { answer: p.id };
+        if (p.h && p.pos.length && p.nat) return { answer: p.id };
       }
     },
     init: () => ({ guesses: [] }),
@@ -323,16 +327,15 @@ export const FOOTBALL = {
   // Name the ten players on a ranked list. Three wrong names and the round is over.
   top10: {
     gen(r) {
-      const bigNats = NATS.filter(c => natCount.get(c) >= 25), bigClubs = BIG_CLUBS.filter(c => CLUBS[c].sl >= 100);
+      const bigNats = NATS.filter(c => natCount.get(c) >= 12), bigClubs = BIG_CLUBS.filter(c => CLUBS[c].sl >= 100);
       const clubTotal = (p, club, i) => p.clubs.filter(c => c[0] === club).reduce((t, c) => t + (c[i] ?? 0), 0);
       for (;;) {
         const kind = pick(['caps', 'intGoals', 'clubApps', 'clubGoals'], r), nat = kind === 'caps' || kind === 'intGoals';
         const key = nat ? pick(bigNats, r) : pick(bigClubs, r);
         const val = nat ? p => p[kind] : p => clubTotal(p, key, kind === 'clubApps' ? 3 : 4);
-        const list = (nat ? PLAYERS.filter(p => p.nat === key) : PLAYERS.filter(p => p.clubIds.has(key))).map(p => ({ p, v: val(p) })).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
+        const list = (nat ? pool.filter(p => p.nat === key) : pool.filter(p => p.clubIds.has(key))).map(p => ({ p, v: val(p) })).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
         if (list.length < 11 || list[9].v === list[10].v) continue; // no tie at the cut-off
         const top = list.slice(0, 10);
-        if (top.filter(x => IN_B.has(x.p.id)).length < BANDS.top10.known) continue;
         const name = nat ? nationName(key) : CLUBS[key].name;
         const title = { caps: `Most caps for ${name}`, intGoals: `Top scorers for ${name}`, clubApps: `Most league games for ${name}`, clubGoals: `Most league goals for ${name}` }[kind];
         return { title, nat, rows: top.map(({ p, v }) => ({ id: p.id, v })) };
@@ -361,10 +364,14 @@ export const FOOTBALL = {
     }),
     share: (p, s) => `${s.found.length}/10`,
   },
-};
+  };
+}
 
-// Search list for the browser: every player, most famous first.
-// Most viewed first, so the search suggests famous players first; the main club tells namesakes apart.
-export const PLAYER_INDEX = [...PLAYERS].sort((a, b) => b.v - a.v).map(p => [p.id, p.name, p.nat || '', mainClub(p)]);
+// Players' games use today's players; the same games with an "l-" id use the legends.
+export const FOOTBALL = { ...games(POOLS.active), ...Object.fromEntries(Object.entries(games(POOLS.legends)).map(([id, g]) => [`l-${id}`, g])) };
+export const poolOf = game => (game.startsWith('l-') ? 'legends' : 'active');
+
+// Search lists for the browser, one per pool, most viewed first: [id, name, nation, photo url].
+export const PLAYER_INDEX = Object.fromEntries(Object.entries(POOLS).map(([k, pool]) => [k, pool.map(p => [p.id, p.name, p.nat || '', photo(p.id) || ''])]));
 export const answerName = (game, p) => (p.answer ? BY_ID.get(p.answer).name : null);
 export { PLAYERS, fits, matching }; // for tests

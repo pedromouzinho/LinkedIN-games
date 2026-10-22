@@ -68,6 +68,8 @@ Object.assign(GAMES, {
   top10: { kind: 'f', title: 'Top 10', icon: '🔟', theme: '#334155', search: true,
     rules: 'Name the ten players on today’s list. Each row has a hint. Three wrong names and the round ends.' },
 });
+// The same games over retired legends (ids "l-…", see football.js); the football ones only use players still playing.
+for (const id of ['whoami', 'clues', 'grid', 'links', 'bingo', 'hotcold', 'top10']) GAMES[`l-${id}`] = { ...GAMES[id], kind: 'l', title: `${GAMES[id].title} Legends` };
 
 let cfg, me;
 const inviteLink = () => `${location.origin}/?invite=${me.uid}`;
@@ -165,10 +167,11 @@ function home() {
     if (day < cfg.launch || past.length >= 14) break;
     past.push(day);
   }
-  const ids = Object.keys(GAMES), logic = ids.filter(id => !GAMES[id].kind), ball = ids.filter(id => GAMES[id].kind === 'f');
+  const ids = Object.keys(GAMES), logic = ids.filter(id => !GAMES[id].kind), ball = ids.filter(id => GAMES[id].kind === 'f'), legends = ids.filter(id => GAMES[id].kind === 'l');
   $('#center').innerHTML = `<div class="card"><h2>Today’s puzzles</h2><p class="muted">Win one every day to keep your streak.</p></div>
     <h3 class="sec">🧠 Logic</h3>${logic.map(tile).join('')}
-    <h3 class="sec">⚽ Football</h3>${ball.map(tile).join('')}
+    <h3 class="sec">⚽ Football <span class="small">· players still playing</span></h3>${ball.map(tile).join('')}
+    <h3 class="sec">⭐ Legends <span class="small">· retired players</span></h3>${legends.map(tile).join('')}
     ${past.length ? `<div class="card"><h3>Archive</h3><p class="muted small">Practice past puzzles. They don’t count for the leaderboard.</p>
       ${past.map(day => `<div class="arch"><span>${new Date(day + 'T12:00').toLocaleDateString(LOCALE, { month: 'short', day: 'numeric' })}</span>
         ${Object.entries(GAMES).map(([id, g]) => `<button class="btn ghost small" data-game="${id}" data-day="${day}" title="${g.title}">${g.icon}</button>`).join('')}</div>`).join('')}</div>` : ''}`;
@@ -279,8 +282,8 @@ async function result(id, day, res) {
   if (!res.stats) res = await api(`/api/result?game=${id}`);
   const headline = !res.won ? 'Not this time' : res.pct == null ? 'First to finish today!' : res.pct >= 90 ? 'Lightning fast ⚡' : res.pct >= 60 ? 'Faster than most' : res.pct >= 30 ? 'Nicely done' : 'Solved!';
   const sub = !res.won ? 'A new one is waiting tomorrow.' : res.pct == null ? 'Nobody else has finished yet.' : `Faster than ${res.pct}% of today’s players`;
-  const line = g.kind === 'f' ? res.share : fmt(res.secs);
-  const text = `${g.title} #${cfg.num} ${g.icon}\n${line}${g.kind === 'f' ? ` · ${fmt(res.secs)}` : ''}${res.hints ? ` · 💡${res.hints}` : ''}\n🔥 ${res.streak}-day streak\nPlay with me: ${inviteLink()}`;
+  const line = g.kind ? res.share : fmt(res.secs);
+  const text = `${g.title} #${cfg.num} ${g.icon}\n${line}${g.kind ? ` · ${fmt(res.secs)}` : ''}${res.hints ? ` · 💡${res.hints}` : ''}\n🔥 ${res.streak}-day streak\nPlay with me: ${inviteLink()}`;
   const s = res.stats, others = Object.keys(GAMES).filter(k => k !== id && !me.played[k]);
   $('#center').innerHTML = `<div class="card result" style="--theme:${g.theme}">
     <div class="res-hero">
@@ -288,7 +291,7 @@ async function result(id, day, res) {
       <div class="small">${g.title} #${cfg.num}</div>
       <h2>See you tomorrow.</h2>
       <div class="res-inner">
-        <span class="pill">${res.won ? `Solved in ${fmt(res.secs)}` : 'Round over'}</span>${g.kind === 'f' && res.share ? `<pre class="share">${esc(res.share)}</pre>` : ''}
+        <span class="pill">${res.won ? `Solved in ${fmt(res.secs)}` : 'Round over'}</span>${g.kind && res.share ? `<pre class="share">${esc(res.share)}</pre>` : ''}
         <b>${headline}</b><span class="muted small">${sub}</span>
         <div class="row center"><button class="btn" id="share">Share</button><button class="btn ghost" id="copy">Copy</button></div>
       </div>
@@ -333,22 +336,22 @@ const catHtml = c => (c.t === 'club' ? `${shirt(c.colors, c.name)}<span>${esc(c.
   : c.t === 'nat' ? `<span class="flag">${flag(c.id)}</span><span>${esc(c.name)}</span>` : `<span class="flag">🧤</span><span>${esc(c.name)}</span>`);
 const norm = t => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
-let playerList;
-const players = () => (playerList ??= api('/api/players').then(list => list.map(([id, name, nat, club]) => ({ id, name, nat, club, key: norm(name) }))));
+const playerLists = {}; // one search list per pool: players still playing, or legends
+const players = pool => (playerLists[pool] ??= api(`/api/players?pool=${pool}`).then(list => list.map(([id, name, nat, photo]) => ({ id, name, nat, photo, key: norm(name) }))));
 
 // Type-ahead over every player in the database; most famous first, accents ignored.
-function searchBox(el, onPick) {
+function searchBox(el, onPick, pool) {
   el.innerHTML = `<div class="search"><input placeholder="Type a player’s name…" autocomplete="off" spellcheck="false" aria-label="Player name">
     <ul role="listbox"></ul></div>`;
   const input = el.querySelector('input'), list = el.querySelector('ul');
   let items = [], active = 0;
   const paint = () => (list.innerHTML = items.map((p, i) => `<li role="option" data-i="${i}" data-id="${p.id}" class="${i === active ? 'on' : ''}">
-    <span class="flag">${flag(p.nat)}</span>${esc(p.name)}<span class="muted small born">${esc(p.club)}</span></li>`).join(''));
+    ${ph(p.photo)}<span class="flag">${flag(p.nat)}</span>${esc(p.name)}</li>`).join(''));
   const choose = i => { const p = items[i]; if (!p) return; items = []; paint(); input.value = ''; onPick(p); };
   input.oninput = async () => {
     const toks = norm(input.value.trim()).split(/\s+/).filter(Boolean);
     items = [];
-    if (toks.join('').length >= 2) for (const p of await players()) if (toks.every(t => p.key.includes(t)) && items.push(p) >= 7) break;
+    if (toks.join('').length >= 2) for (const p of await players(pool)) if (toks.every(t => p.key.includes(t)) && items.push(p) >= 7) break;
     active = 0;
     paint();
   };
@@ -362,7 +365,7 @@ function searchBox(el, onPick) {
 
 function playFootball(id, data) {
   stop();
-  const g = GAMES[id], practice = !data.play, ui = FBOARDS[id], local = {};
+  const g = GAMES[id], practice = !data.play, ui = FBOARDS[id.replace(/^l-/, '')], local = {};
   let view = data.view, busy = false, finished = data.done;
   $('#center').innerHTML = `<div class="card game f-${id}" style="--theme:${g.theme}">
     <div class="row"><button class="btn ghost small" id="back" aria-label="Back">←</button><b>${g.icon} ${g.title} ${practice ? data.day : '#' + data.num}</b><span id="timer">0:00</span></div>
@@ -403,7 +406,7 @@ function playFootball(id, data) {
     $('#fmsg').insertAdjacentHTML('afterend', `<div class="row center"><button class="btn" id="seeres">See results →</button></div>`);
     $('#seeres').onclick = () => result(id, data.day, res);
   }
-  if (g.search && !finished) searchBox($('#fask'), p => act({ guess: p.id }));
+  if (g.search && !finished) searchBox($('#fask'), p => act({ guess: p.id }), g.kind === 'l' ? 'legends' : 'active');
   if (g.search) $('#fask input')?.focus();
   $('#skip')?.addEventListener('click', () => act({ skip: true }));
   $('#giveup').onclick = async () => { if (await ask('Give up?', 'The answer will be revealed and today’s round ends.', 'Give up')) act({ giveUp: true }); };
@@ -458,7 +461,7 @@ const FBOARDS = {
       local.order ??= v.cards.map(c => c.id);
       const cards = local.order.map(id => v.cards.find(c => c.id === id)).filter(Boolean);
       el.innerHTML = `${v.solved.map(g => `<div class="group l${g.level}${g.found ? '' : ' missed'}"><b>${esc(g.title)}</b><span>${g.names.map(esc).join(', ')}</span></div>`).join('')}
-        <div class="cards">${cards.map(c => `<button class="pcard${local.sel.has(c.id) ? ' sel' : ''}" data-id="${c.id}">${esc(c.name)}</button>`).join('')}</div>
+        <div class="cards">${cards.map(c => `<button class="pcard${local.sel.has(c.id) ? ' sel' : ''}" data-id="${c.id}">${c.photo ? ph(c.photo, 'card') : esc(c.name)}</button>`).join('')}</div>
         ${cards.length ? `<div class="row center"><span class="muted small">Mistakes left: ${'●'.repeat(v.maxMistakes - v.mistakes)}${'○'.repeat(v.mistakes)}</span></div>
         <div class="row center tools"><button class="btn ghost small" id="shuf">Shuffle</button><button class="btn ghost small" id="desel">Deselect</button>
         <button class="btn small" id="submit" ${local.sel.size === 4 ? '' : 'disabled'}>Submit</button></div>` : ''}`;
@@ -476,7 +479,7 @@ const FBOARDS = {
     render(el, v, act, local) {
       local.end ??= Date.now() + v.remaining * 1000;
       el.innerHTML = `<div class="bingo-top"><div class="ring" id="ring">${Math.ceil(v.remaining)}</div>
-        <div class="now">${v.current ? `<span class="muted small">Where does he fit?</span>${ph(v.current.photo)}<b>${esc(v.current.name)}</b><span class="muted small">${v.left} players left</span>` : '<b>Done</b>'}</div>
+        <div class="now">${v.current ? `<span class="muted small">Where does he fit?</span>${ph(v.current.photo)}${v.current.name ? `<b>${esc(v.current.name)}</b>` : ''}<span class="muted small">${v.left} players left</span>` : '<b>Done</b>'}</div>
         ${v.current ? '<button class="btn small" id="bskip">Skip</button>' : ''}</div>
         <div class="bingo">${v.cats.map((c, i) => `<button class="bq${v.cells[i] ? ' ok' : ''}${v.wrong === i ? ' wrong' : ''}" data-cell="${i}" ${v.cells[i] ? 'disabled' : ''}>
           ${v.cells[i] ? `<b>${esc(v.cells[i])}</b><span class="muted">${esc(c.name)}</span>` : catHtml(c)}</button>`).join('')}</div>`;

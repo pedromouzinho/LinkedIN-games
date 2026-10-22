@@ -282,3 +282,6 @@ a { color: inherit; }
 .ph { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; background: var(--given); vertical-align: middle; margin-right: 6px; }
 .ph.big, .face .ph, .now .ph { display: block; width: 64px; height: 64px; margin: 0 auto 4px; }
 .sq .ph { display: block; width: 60%; height: auto; aspect-ratio: 1; margin: 0 auto 2px; }
+.now .ph { width: 88px; height: 88px; }
+.pcard .ph.card { display: block; width: 100%; max-width: 92px; height: auto; aspect-ratio: 1; margin: 0 auto; background: none; }
+.pcard.sel .ph.card { outline: 3px solid #fff; }

@@ -243,7 +243,7 @@ const routes = {
   'GET /api/leaderboard': async ({ uid }) => leaderboard(uid, today()),
   'GET /api/result': async ({ uid, game }) => summary(uid, game, today()),
 
-  'GET /api/players': async ({ res }) => { res.setHeader('Cache-Control', 'private, max-age=3600'); return PLAYER_INDEX; },
+  'GET /api/players': async ({ res, query }) => { res.setHeader('Cache-Control', 'private, max-age=3600'); return PLAYER_INDEX[query.get('pool') === 'legends' ? 'legends' : 'active']; },
 
   'GET /api/puzzle': async ({ uid, game, day }) => {
     if (F[game]) {

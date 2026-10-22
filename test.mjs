@@ -71,71 +71,83 @@ console.log(`ok: ${days} days, slowest ms`, Object.fromEntries(Object.entries(sl
 
 // ---------- football games ----------
 {
-  const { FOOTBALL: F, BANDS: FB, PLAYERS, fits, matching } = await import('./football.js');
-  const play = (g, p, s, a, t = 0) => F[g].move(p, s, a, t).state;
+  const { FOOTBALL: F, BANDS: FB, POOLS, fits, matching } = await import('./football.js');
+  const PLAYERS = [...POOLS.active, ...POOLS.legends];
+  assert(!POOLS.active.some(p => POOLS.legends.includes(p)) && PLAYERS.length === 700, 'pools: the 700 most viewed, split in two');
   const fdays = Math.min(days, 25);
+  for (const [pre, pool] of [['', POOLS.active], ['l-', POOLS.legends]]) {
+  const play = (g, p, s, a, t = 0) => F[pre + g].move(p, s, a, t).state;
+  const gen = (g, r) => time(pre + g, () => F[pre + g].gen(r));
+  const inPool = id => pool.some(p => p.id === id);
   for (let day = 1; day <= fdays; day++) {
     const r = G.rng(day * 40503);
     for (const g of ['whoami', 'clues']) {
-      const p = time(g, () => F[g].gen(r)), name = PLAYERS.find(x => x.id === p.answer).name;
-      let s = F[g].init(p);
-      assert(!JSON.stringify(F[g].view(p, s)).includes(name), `${g} view hides the answer`);
+      const p = gen(g, r), name = PLAYERS.find(x => x.id === p.answer).name, view = s => F[pre + g].view(p, s);
+      assert(inPool(p.answer), `${pre}${g}: answer from its own pool`);
+      let s = F[pre + g].init(p);
+      assert(!JSON.stringify(view(s)).includes(name), `${g} view hides the answer`);
       s = play(g, p, s, { skip: true });
-      assert(!s.done && !JSON.stringify(F[g].view(p, s)).includes(name), `${g} skip reveals more but not the answer`);
+      assert(!s.done && !JSON.stringify(view(s)).includes(name), `${g} skip reveals more but not the answer`);
       const win = play(g, p, s, { guess: p.answer });
       assert(win.done && win.won && win.score === 3, `${g} correct guess on attempt 2 scores 3`);
       for (let i = 0; i < 4 && !s.done; i++) s = play(g, p, s, { skip: true });
-      assert(s.done && !s.won && F[g].view(p, s).answer.name === name, `${g} runs out and reveals`);
-      assert.throws(() => play(g, p, F[g].init(p), { guess: 'Q0' }), /Pick a player/, `${g} rejects unknown ids`);
+      assert(s.done && !s.won && view(s).answer.name === name, `${g} runs out and reveals`);
+      assert.throws(() => play(g, p, F[pre + g].init(p), { guess: 'Q0' }), /Pick a player/, `${g} rejects unknown ids`);
+      const other = (pre ? POOLS.active : POOLS.legends)[0].id;
+      assert.throws(() => play(g, p, F[pre + g].init(p), { guess: other }), /Pick a player/, `${g} rejects players from the other pool`);
     }
-    const w = F.whoami.gen(G.rng(day));
+    const w = F[pre + 'whoami'].gen(G.rng(day));
     assert.equal(PLAYERS.filter(q => w.clubs.every(c => q.clubIds.has(c.club))).length, 1, 'whoami: one player fits all four clubs');
 
-    const gr = time('grid', () => F.grid.gen(r));
+    const gr = gen('grid', r);
     const cellFits = (q, i) => fits(q, gr.cats[Math.floor(i / 3)]) && fits(q, gr.cats[3 + (i % 3)]);
-    let gs = F.grid.init(gr);
+    let gs = F[pre + 'grid'].init(gr);
     for (let i = 0; i < 9; i++) {
-      const q = PLAYERS.find(q => cellFits(q, i) && !gs.cells.includes(q.id));
-      const res = F.grid.move(gr, gs, { guess: q.id, cell: i });
+      const q = pool.find(q => cellFits(q, i) && !gs.cells.includes(q.id));
+      const res = F[pre + 'grid'].move(gr, gs, { guess: q.id, cell: i });
       gs = res.state;
     }
     assert(gs.done && gs.won && gs.score === 9, 'grid: filling all squares wins');
-    const misfit = PLAYERS.find(q => !Array.from({ length: 9 }, (_, i) => cellFits(q, i)).some(Boolean));
-    const miss = F.grid.move(gr, F.grid.init(gr), { guess: misfit.id });
+    const misfit = pool.find(q => !Array.from({ length: 9 }, (_, i) => cellFits(q, i)).some(Boolean));
+    const miss = F[pre + 'grid'].move(gr, F[pre + 'grid'].init(gr), { guess: misfit.id });
     assert(miss.state.guesses === 1 && !miss.state.cells.some(Boolean), 'grid: a player with no square costs a guess');
 
-    const ln = time('links', () => F.links.gen(r));
+    const ln = gen('links', r);
+    assert(ln.groups.every(g => g.ids.every(inPool)), 'links: players from its own pool');
     for (const grp of ln.groups) for (const id of grp.ids) {
       const q = PLAYERS.find(x => x.id === id);
       assert.equal(ln.groups.filter(g2 => fits(q, g2.cat)).length, 1, 'links: each player fits exactly one group');
     }
-    let ls = F.links.init(ln);
-    const oneAway = F.links.move(ln, ls, { submit: [...ln.groups[0].ids.slice(0, 3), ln.groups[1].ids[0]] });
+    let ls = F[pre + 'links'].init(ln);
+    const oneAway = F[pre + 'links'].move(ln, ls, { submit: [...ln.groups[0].ids.slice(0, 3), ln.groups[1].ids[0]] });
     assert(oneAway.reply.msg.startsWith('One away') && oneAway.state.mistakes === 1, 'links: 3 of 4 is one away');
     for (const grp of ln.groups) ls = play('links', ln, ls, { submit: grp.ids });
     assert(ls.done && ls.won, 'links: all four groups win');
 
-    const bg = time('bingo', () => F.bingo.gen(r));
+    const bg = gen('bingo', r);
+    assert(bg.stream.every(inPool), 'bingo: players from its own pool');
     assert.equal(matching(bg.stream.slice(0, FB.bingo.solvableWithin), bg.cats), 12, 'bingo: completable from the first 25 players');
     assert.equal(new Set(bg.stream).size, bg.stream.length, 'bingo: no player twice');
-    let bs = F.bingo.init(bg);
+    let bs = F[pre + 'bingo'].init(bg);
     const timeout = play('bingo', bg, bs, { skip: true }, FB.bingo.secs + 1);
     assert(timeout.done && !timeout.won, 'bingo: moves after the time limit end the game');
     bs = play('bingo', bg, bs, { skip: true });
     assert.equal(bs.at, 1, 'bingo: skip moves on');
 
-    const hc = time('hotcold', () => F.hotcold.gen(r));
-    let hs = play('hotcold', hc, F.hotcold.init(hc), { guess: PLAYERS[0].id === hc.answer ? PLAYERS[1].id : PLAYERS[0].id });
-    assert(F.hotcold.view(hc, hs).guesses[0].score < 100 && !hs.done, 'hotcold: a wrong guess gives feedback');
+    const hc = gen('hotcold', r);
+    let hs = play('hotcold', hc, F[pre + 'hotcold'].init(hc), { guess: pool[0].id === hc.answer ? pool[1].id : pool[0].id });
+    assert(F[pre + 'hotcold'].view(hc, hs).guesses[0].score < 100 && !hs.done, 'hotcold: a wrong guess gives feedback');
     hs = play('hotcold', hc, hs, { guess: hc.answer });
     assert(hs.done && hs.won && hs.score === FB.hotcold.guesses - 1, 'hotcold: found on guess 2');
 
-    const tp = time('top10', () => F.top10.gen(r));
+    const tp = gen('top10', r);
+    assert(tp.rows.every(x => inPool(x.id)), 'top10: list from its own pool');
     assert(tp.rows.length === 10 && tp.rows.every((x, i) => !i || tp.rows[i - 1].v >= x.v), 'top10: ten rows, ranked');
-    let ts = F.top10.init(tp);
-    assert(!JSON.stringify(F.top10.view(tp, ts)).includes(PLAYERS.find(x => x.id === tp.rows[0].id).name), 'top10 view hides names');
+    let ts = F[pre + 'top10'].init(tp);
+    assert(!JSON.stringify(F[pre + 'top10'].view(tp, ts)).includes(PLAYERS.find(x => x.id === tp.rows[0].id).name), 'top10 view hides names');
     for (const row of tp.rows) ts = play('top10', tp, ts, { guess: row.id });
     assert(ts.done && ts.won && ts.score === 10, 'top10: naming all ten wins');
+  }
   }
   for (const [g, ms] of Object.entries(slow)) assert(ms < 3000, `${g} took ${ms.toFixed(0)}ms`);
   console.log(`ok: football ${fdays} days, slowest ms`, Object.fromEntries(Object.entries(slow).filter(([g]) => g in F).map(([g, v]) => [g, Math.round(v)])));
